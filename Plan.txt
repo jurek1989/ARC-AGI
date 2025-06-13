@@ -1,0 +1,107 @@
+ARC-AGI System - Stały Kontekst Cursor
+
+Buduję autorski system rozwiązujący zadania ARC Prize 2025 (Abstraction and Reasoning Corpus) przy użyciu własnego, minimalnego DSL oraz inteligentnego wnioskowania opartego na obiektach i regułach. System prowadzony jest w Colabie, wszystkie dane i kod są w katalogu projektu.
+
+STRUKTURA SYSTEMU
+System działa w pipeline:
+Grid → Obiekty i cechy → Wnioskowanie → Operacja DSL → Output
+
+Składa się z:
+
+Grid: siatka wejściowa i wyjściowa (2D), z porównywaniem i wizualizacją.
+
+Object Detection: wykrywanie obiektów (8-połączeniowe) i ich opis (kolor, rozmiar, kształt, pozycja, otwory).
+
+Pattern Analyzer: analiza i klasyfikacja wzorca transformacji (np. fill_pattern, tiling, hole_based_selection, size_change, complex).
+
+Rule Inference: automatyczne wnioskowanie reguł transformacji.
+
+DSL: zestaw prostych, przejrzystych operacji (np. ExtractSmallestObject, GridSelfTiling, ShapeToColorMapping).
+
+IntelligentSolver: orchestracja powyższych kroków dla każdego zadania.
+
+CELE I STRATEGIA
+Cel główny: zbudować jak najprostszy i najczytelniejszy system, który rozwiązuje jak najwięcej zadań przy 100% trafności per task. Tylko wtedy uznajemy, że system "rozumie" transformację.
+
+Filary projektu:
+
+Jak najprostszy DSL – minimalny, ale wystarczający.
+
+Jak najbardziej trafne i sprytne reguły wnioskowania – preferujemy proste zasady, które generalizują.
+
+Wykrywanie obiektów i ich opis semantyczny – kluczowy punkt systemu.
+
+Integracja z LLM to nie dodatek, tylko rdzeń projektu:
+
+LLM otrzyma listę wykrytych obiektów, cechy wejścia/wyjścia i aktualne operacje DSL.
+
+Wspomoże wybór operacji i parametrów DSL.
+
+Ostrożnie może też proponować rozszerzenia DSL, o ile są semantycznie trafne i nie łamią działania poprzednich zadań.
+
+AKTUALNY STAN
+
+Mamy zaimplementowane 10 operacji DSL.
+
+Osiągamy:
+
+100% trafności na 10 zadaniach treningowych (36/36 przykładów).
+
+100% na 20 zadaniach testowych (71/71).
+
+2.60% na pełnym zbiorze ARC (26/1000).
+
+Obiektowa detekcja działa bardzo dobrze.
+
+Reguły wnioskowania są dopracowywane ręcznie.
+
+PLAN DALSZY
+Aktualny etap:
+
+Nadal rozwijamy DSL i reguły.
+
+Każda nowa operacja musi przechodzić przez wszystkie solved tasks bez regresji.
+
+Nie komplikujemy – każda reguła lub operacja ma być zrozumiała i testowalna.
+
+Za kilka zadań (około 20):
+
+Zaczniemy analizować DSL pod kątem uogólniania:
+
+uproszczenie istniejących operacji,
+
+rozbicie złożonych na prostsze, bardziej składane,
+
+testy ponownego użycia fragmentów DSL między zadaniami,
+
+pierwsze próby wykorzystania LLM do doboru operacji i reguł.
+
+STRUKTURA PROJEKTU
+
+ARC/
+├── arc_agi_system.py
+    - Główny kod systemu
+    - Klasa Grid (reprezentacja siatki)
+    - Wszystkie operacje DSL (np. ExtractSmallestObject, GridSelfTiling, etc.)
+    - PatternAnalyzer (analiza wzorców)
+    - IntelligentSolver (rozwiązywanie zadań)
+    - Funkcje pomocnicze (wykrywanie obiektów, etc.)
+
+├── main.py
+    - Punkt wejścia do systemu
+    - Konfiguracja testów (listy zadań)
+    - Funkcje testowe
+    - Generowanie raportów
+
+├── task_viewer.py
+    - Niezależny moduł do przeglądania pojedynczych zadań
+    - Zapisywanie zadań w formacie tekstowym i PNG
+    - Nie jest częścią głównego systemu
+
+├── dane/
+    ├── arc-agi_training_challenges.json
+    └── arc-agi_training_solutions.json
+
+└── task_views/
+    ├── png/  (wizualizacje graficzne)
+    └── text/ (reprezentacje tekstowe)
