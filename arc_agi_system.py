@@ -28,6 +28,9 @@ from collections import deque, defaultdict
 from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Tuple, Dict, Set, Optional
+import time
+import sys
+from datetime import datetime
 
 
 # === Reprezentacja siatki ===
@@ -620,14 +623,71 @@ class ObjectGravitationalMove(Operation):
     
     def apply(self, grid):
         """Stosuje operację grawitacyjnego przesunięcia"""
-        from gravitational_move_operation import gravitational_move_operation
-        
-        result_arr = gravitational_move_operation(grid.pixels)
-        
-        if result_arr is not None:
-            return Grid(result_arr)
-        else:
+        objects = find_objects_8connected(grid.pixels)
+        if len(objects) != 2:
             return grid.copy()
+        
+        # Określ który obiekt jest statyczny (kolor 8), a który ruchomy (kolor 2)
+        static_obj = None
+        moving_obj = None
+        
+        for obj in objects:
+            color = grid.pixels[obj[0][0], obj[0][1]]
+            if color == 8:
+                static_obj = obj
+            elif color == 2:
+                moving_obj = obj
+        
+        if not static_obj or not moving_obj:
+            return grid.copy()
+        
+        # Oblicz środek statycznego obiektu
+        static_center = np.mean(static_obj, axis=0)
+        
+        # Oblicz środek ruchomego obiektu
+        moving_center = np.mean(moving_obj, axis=0)
+        
+        # Oblicz kierunek ruchu (normalizowany wektor)
+        direction = static_center - moving_center
+        if np.any(direction):
+            direction = direction / np.linalg.norm(direction)
+        
+        # Stwórz kopię siatki
+        result = grid.copy()
+        
+        # Przesuwaj ruchomy obiekt krok po kroku aż do styku
+        while True:
+            # Znajdź nowe pozycje dla wszystkich pikseli ruchomego obiektu
+            new_positions = []
+            for pos in moving_obj:
+                new_pos = pos + direction
+                new_pos = np.round(new_pos).astype(int)
+                if (0 <= new_pos[0] < result.pixels.shape[0] and 
+                    0 <= new_pos[1] < result.pixels.shape[1]):
+                    new_positions.append(tuple(new_pos))
+            
+            # Sprawdź czy nowe pozycje nie kolidują ze statycznym obiektem
+            collision = False
+            for pos in new_positions:
+                if pos in static_obj:
+                    collision = True
+                    break
+            
+            if collision:
+                break
+            
+            # Usuń stary ruchomy obiekt
+            for pos in moving_obj:
+                result.pixels[pos] = 0
+            
+            # Umieść ruchomy obiekt w nowych pozycjach
+            for pos in new_positions:
+                result.pixels[pos] = 2
+            
+            # Zaktualizuj pozycje ruchomego obiektu
+            moving_obj = new_positions
+        
+        return result
 
 
 def find_objects_8connected(grid: np.ndarray) -> List[List[Tuple[int, int]]]:
@@ -1732,43 +1792,273 @@ def test_improved_solver(challenges, task_id):
     return success_count, total_examples
 
 
-def main():
-    # Ustaw ścieżki względem folderu projektu (Windows-friendly)
-    base_dir = Path(__file__).parent
-    challenges_path = base_dir / "upload" / "arc-agi_training_challenges.json"
-    solutions_path = base_dir / "upload" / "arc-agi_training_solutions.json"
+# === Moduł uruchomieniowy ===
+"""
+ARC-AGI System - Moduł uruchomieniowy
 
+Ten moduł zawiera funkcje do uruchamiania systemu w różnych trybach:
+- single: test pojedynczego zadania
+- training: test na 10 zadaniach treningowych
+- solved: test na 26 rozwiązanych zadaniach
+- full: test na pełnym zbiorze ARC (1000 zadań)
+
+Użycie:
+    python arc_agi_system.py [tryb] [task_id]
+    
+Przykłady:
+    python arc_agi_system.py single 00d62c1b
+    python arc_agi_system.py training
+    python arc_agi_system.py solved
+    python arc_agi_system.py full
+"""
+
+# Zbiory zadań
+TRAINING_TASKS = [
+    "00d62c1b", "31adaf00", "358ba94e", "1f85a75f", "007bbfb7",
+    "0692e18c", "009d5c81", "0520fde7", "05f2a901", "0b148d64"
+]
+
+SOLVED_TASKS = [
+    "00576224", "007bbfb7", "009d5c81", "00d62c1b", "0520fde7",
+    "05f2a901", "0692e18c", "0b148d64", "1cf80156", "1f85a75f",
+    "23b5c85d", "31adaf00", "358ba94e", "3c9b0459", "72ca375d",
+    "a416b8f3", "a59b95c0", "a87f7484", "be94b721", "bf699163",
+    "c8f0f002", "d037b0a7", "d06dbe63", "d9f24cd1", "dc0a314f",
+    "e9afcf9a"
+]
+
+def test_single_task(challenges: dict, task_id: str, verbose: bool = False) -> tuple:
+    """Testuj pojedyncze zadanie i zwróć wyniki"""
+    try:
+        task_data = challenges[task_id]
+        train_examples = task_data['train']
+        
+        solver = IntelligentSolver()
+        solver.set_training_examples(train_examples)
+        
+        success_count = 0
+        total_count = len(train_examples)
+        details = []
+        
+        for i, example in enumerate(train_examples):
+            input_grid = Grid(example['input'])
+            target_output = Grid(example['output'])
+            
+            solution, attempts = solver.solve(input_grid, target_output, max_attempts=10)
+            
+            if solution is not None:
+                success_count += 1
+                status = "✅"
+            else:
+                status = "❌"
+            
+            if verbose:
+                details.append(f"  Example {i+1}: {status}")
+        
+        return success_count, total_count, success_count == total_count, details
+        
+    except Exception as e:
+        if verbose:
+            print(f"Error in task {task_id}: {e}")
+        return 0, 0, False, [f"Error: {e}"]
+
+def print_task_lists():
+    """Wyświetl dostępne zbiory zadań"""
+    print("\n📋 AVAILABLE TASK SETS:")
+    print("=" * 50)
+    
+    print(f"\n🎯 TRAINING TASKS ({len(TRAINING_TASKS)}):")
+    for i, task_id in enumerate(TRAINING_TASKS, 1):
+        print(f"  {i:2d}. {task_id}")
+    
+    print(f"\n✅ SOLVED TASKS ({len(SOLVED_TASKS)}):")
+    for i, task_id in enumerate(SOLVED_TASKS, 1):
+        print(f"  {i:2d}. {task_id}")
+    
+    print(f"\n🌐 FULL DATASET: 1000 tasks total")
+    print("=" * 50)
+
+def run_test_mode(mode: str, task_id: str = None, verbose: bool = True) -> dict:
+    """Uruchom test w określonym trybie"""
+    
+    # Określ zbiór zadań
+    if mode == "single":
+        if not task_id:
+            raise ValueError("Task ID required for single mode")
+        task_set = [task_id]
+        description = f"Single Task: {task_id}"
+    elif mode == "training":
+        task_set = TRAINING_TASKS
+        description = "10 Training Tasks"
+    elif mode == "solved":
+        task_set = SOLVED_TASKS
+        description = "26 Solved Tasks"
+    elif mode == "full":
+        task_set = None  # Załaduj wszystkie zadania
+        description = "Full ARC Dataset"
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+    
+    # Wczytaj dane
+    base_dir = Path(__file__).parent
+    challenges_path = base_dir / "dane" / "arc-agi_training_challenges.json"
+    solutions_path = base_dir / "dane" / "arc-agi_training_solutions.json"
+    
     if not challenges_path.exists():
         raise FileNotFoundError(f"Nie znaleziono pliku: {challenges_path}")
     if not solutions_path.exists():
         raise FileNotFoundError(f"Nie znaleziono pliku: {solutions_path}")
-
+    
     challenges, solutions = load_arc_data(str(challenges_path), str(solutions_path))
-
-    # Testuj na wszystkich zadaniach z ObjectGravitationalMove
-    test_tasks = ["00d62c1b", "31adaf00", "358ba94e", "1f85a75f", 
-                 "007bbfb7", "0692e18c", "009d5c81", "0520fde7", "05f2a901"]
     
-    # Wyświetl podsumowania zadań
-    print("📋 PODSUMOWANIE ZADAŃ:")
-    for task_id in test_tasks:
-        display_task_summary(challenges, task_id)
+    if task_set is None:
+        task_set = list(challenges.keys())
     
-    total_success = 0
+    # Uruchom testy
+    print(f"🚀 ARC-AGI System Test - {description}")
+    print("=" * 60)
+    print(f"Testing {len(task_set)} tasks...")
+    
+    start_time = time.time()
+    
+    solved_tasks = []
+    partially_solved = []
+    failed_tasks = []
+    total_examples_solved = 0
     total_examples = 0
     
-    for task_id in test_tasks:
-        success, examples = test_improved_solver(challenges, task_id)
-        total_success += success
-        total_examples += examples
+    for i, task_id in enumerate(task_set):
+        if len(task_set) > 50 and i % 100 == 0:
+            elapsed = time.time() - start_time
+            print(f"Progress: {i}/{len(task_set)} ({i/len(task_set)*100:.1f}%) - {elapsed:.1f}s")
+        
+        success, total, fully_solved, details = test_single_task(challenges, task_id, verbose and len(task_set) <= 50)
+        
+        total_examples_solved += success
+        total_examples += total
+        
+        if fully_solved:
+            solved_tasks.append(task_id)
+            if verbose and len(task_set) <= 50:
+                print(f"✅ {task_id}: {success}/{total} (100%)")
+        elif success > 0:
+            partially_solved.append((task_id, success, total))
+            if verbose and len(task_set) <= 50:
+                print(f"⚠️  {task_id}: {success}/{total} ({success/total*100:.1f}%)")
+        else:
+            failed_tasks.append(task_id)
+            if verbose and len(task_set) <= 50:
+                print(f"❌ {task_id}: 0/{total} (0%)")
     
-    print(f"\n{'='*60}")
-    print(f"PODSUMOWANIE KOŃCOWE")
-    print(f"{'='*60}")
-    print(f"Łączne wyniki: {total_success}/{total_examples} przykładów")
-    print(f"Ogólna skuteczność: {total_success/total_examples*100:.1f}%")
-    print(f"{'='*60}")
+    elapsed_total = time.time() - start_time
+    
+    # Wyniki
+    results = {
+        'mode': mode,
+        'description': description,
+        'total_tasks': len(task_set),
+        'solved_tasks': solved_tasks,
+        'partially_solved': partially_solved,
+        'failed_tasks': failed_tasks,
+        'total_examples_solved': total_examples_solved,
+        'total_examples': total_examples,
+        'execution_time': elapsed_total,
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    return results
 
+def print_summary(results: dict):
+    """Wyświetl krótkie podsumowanie"""
+    print("\n" + "=" * 60)
+    print("🎯 SUMMARY")
+    print("=" * 60)
+    print(f"Mode: {results['description']}")
+    print(f"Tasks fully solved: {len(results['solved_tasks'])}/{results['total_tasks']} ({len(results['solved_tasks'])/results['total_tasks']*100:.2f}%)")
+    print(f"Examples solved: {results['total_examples_solved']}/{results['total_examples']} ({results['total_examples_solved']/results['total_examples']*100:.2f}%)")
+    print(f"Execution time: {results['execution_time']:.1f}s")
+    print("=" * 60)
+
+def save_detailed_report(results: dict):
+    """Zapisz szczegółowy raport do pliku"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"arc_test_report_{results['mode']}_{timestamp}.txt"
+    
+    with open(filename, 'w') as f:
+        f.write("ARC-AGI System Test Report\n")
+        f.write("=" * 50 + "\n\n")
+        
+        f.write(f"Test Mode: {results['description']}\n")
+        f.write(f"Timestamp: {results['timestamp']}\n")
+        f.write(f"Execution Time: {results['execution_time']:.2f} seconds\n\n")
+        
+        f.write("SUMMARY STATISTICS\n")
+        f.write("-" * 20 + "\n")
+        f.write(f"Total Tasks: {results['total_tasks']}\n")
+        f.write(f"Fully Solved: {len(results['solved_tasks'])} ({len(results['solved_tasks'])/results['total_tasks']*100:.2f}%)\n")
+        f.write(f"Partially Solved: {len(results['partially_solved'])}\n")
+        f.write(f"Failed: {len(results['failed_tasks'])}\n")
+        f.write(f"Total Examples: {results['total_examples']}\n")
+        f.write(f"Examples Solved: {results['total_examples_solved']} ({results['total_examples_solved']/results['total_examples']*100:.2f}%)\n\n")
+        
+        if results['solved_tasks']:
+            f.write(f"FULLY SOLVED TASKS ({len(results['solved_tasks'])})\n")
+            f.write("-" * 30 + "\n")
+            for i, task_id in enumerate(results['solved_tasks'], 1):
+                f.write(f"{i:3d}. {task_id}\n")
+            f.write("\n")
+        
+        if results['partially_solved']:
+            f.write(f"PARTIALLY SOLVED TASKS ({len(results['partially_solved'])})\n")
+            f.write("-" * 35 + "\n")
+            for i, (task_id, success, total) in enumerate(results['partially_solved'], 1):
+                f.write(f"{i:3d}. {task_id}: {success}/{total} ({success/total*100:.1f}%)\n")
+            f.write("\n")
+        
+        f.write("SYSTEM INFORMATION\n")
+        f.write("-" * 20 + "\n")
+        f.write("ARC-AGI System v1.0\n")
+        f.write("10 DSL Operations:\n")
+        f.write("- FillEnclosedAreas\n")
+        f.write("- FillLargestSquares\n")
+        f.write("- SelectObjectWithDifferentHoleCount\n")
+        f.write("- ExtractSmallestObject\n")
+        f.write("- GridSelfTiling\n")
+        f.write("- GridInvertedSelfTiling\n")
+        f.write("- ShapeToColorMapping\n")
+        f.write("- SubgridIntersection\n")
+        f.write("- ObjectGravitationalMove\n")
+        f.write("- ExtractObjectByUniqueColor\n")
+    
+    print(f"📄 Detailed report saved: {filename}")
+    return filename
+
+def main():
+    """Główna funkcja uruchomieniowa"""
+    if len(sys.argv) < 2:
+        print("Usage: python arc_agi_system.py [mode] [task_id]")
+        print("\nModes:")
+        print("  single <task_id>  - Test single task")
+        print("  training         - Test on 10 training tasks")
+        print("  solved          - Test on 26 solved tasks")
+        print("  full            - Test on full ARC dataset")
+        print("\nExamples:")
+        print("  python arc_agi_system.py single 00d62c1b")
+        print("  python arc_agi_system.py training")
+        print("  python arc_agi_system.py solved")
+        print("  python arc_agi_system.py full")
+        return
+    
+    mode = sys.argv[1].lower()
+    task_id = sys.argv[2] if len(sys.argv) > 2 else None
+    
+    try:
+        results = run_test_mode(mode, task_id)
+        print_summary(results)
+        save_detailed_report(results)
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
