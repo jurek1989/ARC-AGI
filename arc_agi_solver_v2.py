@@ -79,18 +79,55 @@ class Transform:
             elif op == 'orig': continue
             else: raise ValueError(f"Unknown transform: {op}")
         return GridObject(result.pixels)
+    
 
-def detect_transformation(input_grid: Grid, target_grid: Grid):
-    transformations = ['orig', 'flip_y', 'flip_x', 'rotate_90', 'rotate_180', 'rotate_270']
-    obj = GridObject(input_grid.pixels)
+def apply_grid_transform(grid: Grid, transform):
+    if transform == 'orig':
+        return grid.copy()
+    elif transform == 'flip_x':
+        return grid.flip('x')
+    elif transform == 'flip_y':
+        return grid.flip('y')
+    elif transform == 'rotate_90':
+        return grid.rotate(1)
+    elif transform == 'rotate_180':
+        return grid.rotate(2)
+    elif transform == 'rotate_270':
+        return grid.rotate(3)
+    else:
+        raise ValueError(f"Unknown transform: {transform}")
+    
+
+def detect_transformation(input_grid: Grid, target_grid: Grid, verbose=False):
+    transformations = ['orig', 'flip_x', 'flip_y', 'rotate_90', 'rotate_180', 'rotate_270']
+
+    # Single transforms
     for t in transformations:
-        if np.array_equal(Transform(t).apply(obj).grid.pixels, target_grid.pixels):
+        transformed = apply_grid_transform(input_grid, t)
+        if verbose:
+            print(f"  [detect] trying {t}")
+            print(f"    input:\n{input_grid.pixels}")
+            print(f"    transformed:\n{transformed.pixels}")
+            print(f"    target:\n{target_grid.pixels}")
+        if np.array_equal(transformed.pixels, target_grid.pixels):
+            if verbose:
+                print(f"  [detect] matched single: {t}")
             return t
+
+    # Composed transforms
     for t1 in transformations:
         for t2 in transformations:
-            tf = Transform([t1, t2])
-            if np.array_equal(tf.apply(obj).grid.pixels, target_grid.pixels):
+            g1 = apply_grid_transform(input_grid, t1)
+            g2 = apply_grid_transform(g1, t2)
+            if verbose:
+                print(f"  [detect] trying {t1} + {t2}")
+            if np.array_equal(g2.pixels, target_grid.pixels):
+                if verbose:
+                    print(f"  [detect] matched pair: {t1} + {t2}")
                 return [t1, t2]
+
+    if verbose:
+        print("  [detect] no match found")
     return None
 
 ### === PATTERN2D === ###
@@ -108,9 +145,12 @@ class Pattern2D:
             for x in range(reps_x):
                 tf = Transform(self.transform_matrix[y][x])
                 obj = tf.apply(self.base)
-                row_tiles.append(obj.extract_patch().pixels)
-            row_grids.append(np.hstack(row_tiles))
-        return Grid(np.vstack(row_grids))
+                patch = obj.grid.pixels  # ← pełna siatka, NIE extract_patch()
+                row_tiles.append(patch)
+            row = np.hstack(row_tiles)
+            row_grids.append(row)
+        result = np.vstack(row_grids)
+        return Grid(result)
 
 ### === FALLBACK TILE === ###
 def expand_pattern_2d(mask_grid: Grid, tile_grid: Grid, mode='copy_if_1') -> Grid:
@@ -185,7 +225,9 @@ class Identity(Operation):
     def apply(self, obj: GridObject) -> GridObject:
         return obj
 
-def run_program(program: Operation, grid: Grid) -> Grid:
+def run_program(program, grid: Grid) -> Grid:
+    if isinstance(program, Pattern2D):
+        return program.expand()
     obj = GridObject(grid.pixels)
     return program.apply(obj).grid
 
@@ -239,15 +281,21 @@ def suggest_grid_filling_strategy(input_grid, output_grid):
     return None
 
 ### === DEBUGGER / TESTER === ###
-def generate_candidate_programs(input_grid: Grid, output_grid: Grid):
+def generate_candidate_programs(input_grid: Grid, output_grid: Grid, verbose=False):
     candidates = []
+    if verbose:
+        print(f"[generate] input: {input_grid.shape()}, output: {output_grid.shape()}")
     explanations = []
 
     # Heurystyka 1: identyczny rozmiar + histogram kolorów
     if input_grid.shape() == output_grid.shape():
+        if verbose:
+            print("[generate] Heurystyka 1 aktywna (rozmiar =, histogram?):")
         in_hist = np.bincount(input_grid.pixels.flatten(), minlength=10)
         out_hist = np.bincount(output_grid.pixels.flatten(), minlength=10)
         if np.all(in_hist == out_hist):
+            if verbose:
+                print("[generate] Histogram match, dodajemy transformacje:")
             for tf in ['orig', 'flip_x', 'flip_y', 'rotate_90', 'rotate_180', 'rotate_270']:
                 obj = GridObject(input_grid.pixels)
                 result = Transform(tf).apply(obj).grid
@@ -257,17 +305,27 @@ def generate_candidate_programs(input_grid: Grid, output_grid: Grid):
     ih, iw = input_grid.shape()
     oh, ow = output_grid.shape()
     if oh % ih == 0 and ow % iw == 0:
+        if verbose:
+            print("[generate] Heurystyka 2 aktywna (Pattern2D możliwy):")
         scale = (oh // ih) * (ow // iw)
         in_hist = np.bincount(input_grid.pixels.flatten(), minlength=10)
         out_hist = np.bincount(output_grid.pixels.flatten(), minlength=10)
         if np.all((in_hist * scale >= out_hist) | (in_hist == 0)):
             reps_y, reps_x = oh // ih, ow // iw
-            matrix = [[detect_transformation(input_grid, Grid(output_grid.pixels[y*ih:(y+1)*ih, x*iw:(x+1)*iw]))
-                       or 'orig' for x in range(reps_x)] for y in range(reps_y)]
+            matrix = []
+            for y in range(reps_y):
+                row = []
+                for x in range(reps_x):
+                    patch = Grid(output_grid.pixels[y*ih:(y+1)*ih, x*iw:(x+1)*iw])
+                    tf = detect_transformation(input_grid, patch, verbose=verbose) or 'orig'
+                    row.append(tf)
+                matrix.append(row)
             candidates.append((Pattern2D(GridObject(input_grid.pixels), matrix), "pattern2d from grid tiling"))
 
     # Heurystyka 3: maska + kafel
     suggestion = suggest_grid_filling_strategy(input_grid, output_grid)
+    if verbose:
+        print(f"[generate] Heurystyka 3 wynik: {suggestion}")
     if suggestion:
         mask_type = suggestion['mask_type']
         tile_op = suggestion['tile_op']
@@ -276,11 +334,18 @@ def generate_candidate_programs(input_grid: Grid, output_grid: Grid):
         mode = f"copy_if_{1 if mask_type == 'nonzero' else 0}"
         result = expand_pattern_2d(Grid(mask), tile, mode)
         candidates.append((result, f"mask_and_tile: {mask_type} + {tile_op}"))
-
+    for cand, label in candidates:
+        if isinstance(cand, Pattern2D):
+            expanded = cand.expand()
+            print(f"[debug] Expanded Pattern2D ({label}):")
+            print(expanded.pixels)
+            print("[debug] Target output:")
+            print(output_grid.pixels)
+            print("[debug] Match:", np.array_equal(expanded.pixels, output_grid.pixels))
     return candidates
 
 
-def debug_task(task_id, dataset_path="./"):
+def debug_task(task_id, dataset_path="./", verbose=False):
     challenges_file = os.path.join(dataset_path, "arc-agi_training_challenges.json")
     solutions_file = os.path.join(dataset_path, "arc-agi_training_solutions.json")
     with open(challenges_file) as f:
@@ -293,7 +358,7 @@ def debug_task(task_id, dataset_path="./"):
     input_grid = Grid(input_data)
     output_grid = Grid(output_data)
 
-    candidates = generate_candidate_programs(input_grid, output_grid)
+    candidates = generate_candidate_programs(input_grid, output_grid, verbose=verbose)
     for program, explanation in candidates:
         try:
             if isinstance(program, Grid):  # fallback
@@ -312,7 +377,7 @@ def debug_many_tasks(task_ids, dataset_path="./"):
     for task_id in task_ids:
         print(f"===== {task_id} =====")
         try:
-            ok, why = debug_task(task_id, dataset_path)
+            ok, why = debug_task(task_id, dataset_path, verbose=(task_id == "8be77c9e"))
             if ok:
                 print(f"✅ {task_id} passed via {why}")
                 success.append(task_id)
@@ -340,13 +405,21 @@ def debug_many_tasks(task_ids, dataset_path="./"):
         for line in report_lines:
             f.write(line + "\n")
 
+def get_all_task_ids_from_json(dataset_path="./"):
+    challenges_file = os.path.join(dataset_path, "arc-agi_training_challenges.json")
+    with open(challenges_file) as f:
+        challenges = json.load(f)
+    return list(challenges.keys())
 
 if __name__ == "__main__":
-    TASK_IDS = [
-        "00576224", "0c786b71", "3af2c5a8", "3c9b0459", "4c4377d9", "59341089",
-        "6150a2bd", "62c24649", "67a3c6ac", "67e8384a", "68b16354", "6d0aefbc",
-        "6fa7a44f", "74dd1130", "7953d61e", "7fe24cdd", "833dafe3", "8be77c9e",
-        "8d5021e8", "963e52fc", "9dfd6313", "a416b8f3", "bc4146bd", "c48954c1",
-        "c9e6f938", "cf5fd0ad", "ed98d772"
-    ]
+    TASK_IDS = get_all_task_ids_from_json("dane/")
     debug_many_tasks(TASK_IDS, dataset_path="dane/")
+    # TASK_IDS = [
+    #     "00576224", "0c786b71", "3af2c5a8", "3c9b0459", "4c4377d9", "59341089",
+    #     "6150a2bd", "62c24649", "67a3c6ac", "67e8384a", "68b16354", "6d0aefbc",
+    #     "6fa7a44f", "74dd1130", "7953d61e", "7fe24cdd", "833dafe3", "8be77c9e",
+    #     "8d5021e8",  "9dfd6313", "a416b8f3", "bc4146bd", "c48954c1",
+    #     "c9e6f938", "cf5fd0ad", "ed98d772"
+    # ]
+    # debug_many_tasks(TASK_IDS, dataset_path="dane/")
+
