@@ -1,107 +1,112 @@
-ARC-AGI System - Stały Kontekst Cursor
+📘 KONTEKST PROJEKTU ARC (dla Cursor) — WERSJA ROZSZERZONA
 
-Buduję autorski system rozwiązujący zadania ARC Prize 2025 (Abstraction and Reasoning Corpus) przy użyciu własnego, minimalnego DSL oraz inteligentnego wnioskowania opartego na obiektach i regułach. System prowadzony jest w Colabie, wszystkie dane i kod są w katalogu projektu.
+---
 
-STRUKTURA SYSTEMU
-System działa w pipeline:
-Grid → Obiekty i cechy → Wnioskowanie → Operacja DSL → Output
+👤 KIM JESTEM I KIM TY JESTEŚ
 
-Składa się z:
+- Ja: programuję w Pythonie i R, znam też trochę C++. Mam solidne podstawy matematyczne i rozumiem, co robię.
+- Mam pomysły (mam nadzieję, że niezłe), ale **piszę kod wolno i średniej jakości**.
+- Ty: **masz być moim programistą**. Nie zgaduj, jeśli czegoś nie rozumiesz — pytaj.
+- Jeśli trzeba, dostarczę pseudokod, szkic, algorytm — ale to ty piszesz kod, dobrze i z testami.
+- Nie chwal mnie. Pomóż mi znaleźć najlepsze możliwe rozwiązanie.
+- Testy regresyjne są **absolutnie obowiązkowe**. Każda zmiana ma być bezpieczna.
+- Kod ma być czysty, zrozumiały i możliwy do rozwoju.
 
-Grid: siatka wejściowa i wyjściowa (2D), z porównywaniem i wizualizacją.
+---
 
-Object Detection: wykrywanie obiektów (8-połączeniowe) i ich opis (kolor, rozmiar, kształt, pozycja, otwory).
+🧩 O CO CHODZI W ARC PRIZE (KAGGLE, 2025)
 
-Pattern Analyzer: analiza i klasyfikacja wzorca transformacji (np. fill_pattern, tiling, hole_based_selection, size_change, complex).
+- Konkurs oparty na zbiorze ARC (Abstraction and Reasoning Corpus, François Chollet).
+- Każde zadanie to przykład: wejście/wyjście w postaci 2D siatki liczb całkowitych.
+- **Celem jest GENERALIZACJA** — system ma działać na zadaniach, których wcześniej nie widział.
+- Wersja konkursowa działa w środowisku Kaggle:
+  - Brak internetu
+  - Ograniczony czas (20–30 min)
+  - CPU-only, brak GPU
+  - Model musi być samodzielny, lekki, wydajny
 
-Rule Inference: automatyczne wnioskowanie reguł transformacji.
+---
 
-DSL: zestaw prostych, przejrzystych operacji (np. ExtractSmallestObject, GridSelfTiling, ShapeToColorMapping).
+🎯 CEL NADRZĘDNY: GENERALIZACJA
 
-IntelligentSolver: orchestracja powyższych kroków dla każdego zadania.
+Powtarzamy 3 razy:
 
-CELE I STRATEGIA
-Cel główny: zbudować jak najprostszy i najczytelniejszy system, który rozwiązuje jak najwięcej zadań przy 100% trafności per task. Tylko wtedy uznajemy, że system "rozumie" transformację.
+1. **Najważniejszy cel to generalizacja.**
+2. **Najważniejszy cel to generalizacja.**
+3. **Najważniejszy cel to generalizacja.**
 
-Filary projektu:
+Nie interesuje nas rozwiązywanie znanych zadań przez dopasowanie.
+Chcemy systemu, który po przeanalizowaniu 50 zadań potrafi rozwiązać 200.
+To oznacza: opis semantyczny, modularny, kompozycyjny.
 
-Jak najprostszy DSL – minimalny, ale wystarczający.
+---
 
-Jak najbardziej trafne i sprytne reguły wnioskowania – preferujemy proste zasady, które generalizują.
+🧠 MÓJ OGÓLNY PLAN (ramowy, rozwijany w trakcie)
 
-Wykrywanie obiektów i ich opis semantyczny – kluczowy punkt systemu.
+1. Obiektowa percepcja:
+- wykrywanie obiektów i ich cech (kolor, bbox, area, dziury, symetria, relacje, itd, itp, to otwarta lista).
 
-Integracja z LLM to nie dodatek, tylko rdzeń projektu:
+2. Semantyczny DSL:
+- zestaw ogólnych operacji np. rotate(obj), paint_inside(obj), itd itp to otwarta lista
+- DSL musi być testowalny, rozszerzalny, kompozycyjny.
 
-LLM otrzyma listę wykrytych obiektów, cechy wejścia/wyjścia i aktualne operacje DSL.
+3. Warstwa heurystyczna:
+- porównania input/output na poziomie obiektów i ich cech, itd itp to otwarta lista
+- analiza różnic, propozycje transformacji.
 
-Wspomoże wybór operacji i parametrów DSL.
+4. Użycie LLM (lokalnego):
+- nie generuje kodu ani outputów,
+- otrzymuje: opis obiektów, różnice, dostępne operacje,
+- ma zaproponować: strategię, sekwencję operacji lub nową operację.
 
-Ostrożnie może też proponować rozszerzenia DSL, o ile są semantycznie trafne i nie łamią działania poprzednich zadań.
+5. Search:
+- beam search, DFS lub inny planista symboliczny,
+- priorytet operacji wskazanych przez heurystyki lub LLM.
 
-AKTUALNY STAN
+6. Fallback:
+- brute-force lub losowe wariacje w ograniczonym zakresie,
+- Generowanie nowych operacji dsl przez LLM na podstawie: opis obiektów, różnice, dostępne operacje,
+i widzą że się nie udało jak dotąd, tylko jeśli wszystko inne zawiedzie, z walidacją i testem regresyjnym.
+LLm może dodać głupoty, po tym kroku trzeb się dna 100% upewnić że wszytsko dalej działa.
 
-Mamy zaimplementowane 10 operacji DSL.
+---
 
-Osiągamy:
+⚠️ CO ZE STARYM KODEM?
 
-100% trafności na 10 zadaniach treningowych (36/36 przykładów).
+- Plik `arc_agi_system.py` rozwiązuje 26 zadań, ale jest całkowicie **nieprzydatny do generalizacji**.
+- Zawiera ręcznie dopasowane operacje i twarde if-else – nie ma kompozycji, nie ma logiki semantycznej.
+- Traktujemy go jako **antyprzykład**. Nie rozwijamy go. Nie refaktorujemy.
+- Używamy go jedynie jako punkt odniesienia — **czego unikać**.
 
-100% na 20 zadaniach testowych (71/71).
+---
 
-2.60% na pełnym zbiorze ARC (26/1000).
-
-Obiektowa detekcja działa bardzo dobrze.
-
-Reguły wnioskowania są dopracowywane ręcznie.
-
-PLAN DALSZY
-Aktualny etap:
-
-Nadal rozwijamy DSL i reguły.
-
-Każda nowa operacja musi przechodzić przez wszystkie solved tasks bez regresji.
-
-Nie komplikujemy – każda reguła lub operacja ma być zrozumiała i testowalna.
-
-Za kilka zadań (około 20):
-
-Zaczniemy analizować DSL pod kątem uogólniania:
-
-uproszczenie istniejących operacji,
-
-rozbicie złożonych na prostsze, bardziej składane,
-
-testy ponownego użycia fragmentów DSL między zadaniami,
-
-pierwsze próby wykorzystania LLM do doboru operacji i reguł.
-
-STRUKTURA PROJEKTU
+📁 STRUKTURA PROJEKTU
 
 ARC/
 ├── arc_agi_system.py
-    - Główny kod systemu
-    - Klasa Grid (reprezentacja siatki)
-    - Wszystkie operacje DSL (np. ExtractSmallestObject, GridSelfTiling, etc.)
-    - PatternAnalyzer (analiza wzorców)
-    - IntelligentSolver (rozwiązywanie zadań)
-    - Funkcje pomocnicze (wykrywanie obiektów, etc.)
-
-├── main.py
-    - Punkt wejścia do systemu
-    - Konfiguracja testów (listy zadań)
-    - Funkcje testowe
-    - Generowanie raportów
-
+│   - STARY KOD — do analizy błędów projektowych, NIE DO UŻYCIA
+│
+├── arc_agi_solver.py
+│   - NOWY KOD — miejsce na semantyczny DSL, reguły, heurystyki, search
+│
 ├── task_viewer.py
-    - Niezależny moduł do przeglądania pojedynczych zadań
-    - Zapisywanie zadań w formacie tekstowym i PNG
-    - Nie jest częścią głównego systemu
-
+│   - Moduł do przeglądania zadań (wizualizacja + zapis TXT/PNG)
+│
 ├── dane/
-    ├── arc-agi_training_challenges.json
-    └── arc-agi_training_solutions.json
-
+│   ├── arc-agi_training_challenges.json
+│   └── arc-agi_training_solutions.json
+│
 └── task_views/
-    ├── png/  (wizualizacje graficzne)
-    └── text/ (reprezentacje tekstowe)
+    ├── png/    (wizualizacje graficzne)
+    └── text/   (reprezentacje tekstowe)
+
+---
+
+🧷 ZASADY PRACY
+
+- Iteracyjnie, bezpiecznie, z pełną kontrolą.
+- Każdy pomysł jest domyślnie podejrzany — zanim zostanie zakodowany, musi przejść analizę.
+- **Lepiej nie mieć rozwiązania niż mieć złe.**
+- Kod, który nie generalizuje — nie przechodzi.
+- **Zawsze robimy testy regresyjne. Co działało — musi dalej działać.**
+- Kod ma być możliwy do rozszerzania i testowania.
