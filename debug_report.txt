@@ -12,7 +12,7 @@
 ❌ 05a7bcf2: no match
 ❌ 05f2a901: no match
 ❌ 0607ce86: no match
-❌ 0692e18c: no match
+✅ 0692e18c: invert_tile_if_nonzero
 ❌ 06df4c85: no match
 ❌ 070dd51e: no match
 ❌ 08ed6ac7: no match
@@ -56,7 +56,7 @@
 ❌ 15113be4: no match
 ❌ 15660dd6: no match
 ❌ 15663ba9: no match
-❌ 15696249: no match
+✅ 15696249: mask_tile_engine: mask===dominant + tile=orig
 ❌ 17829a00: no match
 ❌ 178fcbfb: no match
 ❌ 17b80ad2: no match
@@ -143,7 +143,7 @@
 ❌ 278e5215: no match
 ❌ 27a28665: no match
 ❌ 27a77e38: no match
-❌ 27f8ce4f: no match
+✅ 27f8ce4f: mask==most_common_color + tile=orig
 ❌ 281123b4: no match
 ❌ 28bf18c6: no match
 ❌ 28e73c20: no match
@@ -267,7 +267,7 @@
 ❌ 4852f2fa: no match
 ❌ 48634b99: no match
 ❌ 48d8fb45: no match
-❌ 48f8583b: no match
+✅ 48f8583b: mask==least_common_color + tile=orig
 ❌ 4938f0c2: no match
 ❌ 494ef9d7: no match
 ❌ 496994bd: no match
@@ -528,7 +528,7 @@
 ❌ 8dab14c2: no match
 ❌ 8dae5dfc: no match
 ❌ 8e1813be: no match
-❌ 8e2edd66: no match
+✅ 8e2edd66: mask_tile_engine: mask=zero + tile=invert
 ❌ 8e301a54: no match
 ❌ 8e5a5113: no match
 ❌ 8eb1be9a: no match
@@ -671,7 +671,7 @@
 ❌ ad173014: no match
 ❌ ad38a9d0: no match
 ❌ ad3b40cf: no match
-❌ ad7e01d0: no match
+✅ ad7e01d0: mask_tile_engine: mask===dominant + tile=orig
 ❌ ae3edfdc: no match
 ❌ ae4f1146: no match
 ❌ ae58858e: no match
@@ -753,7 +753,7 @@
 ❌ c1d99e64: no match
 ❌ c3202e5a: no match
 ❌ c35c1b4c: no match
-❌ c3e719e8: no match
+✅ c3e719e8: mask==most_common_color + tile=orig
 ❌ c3fa4749: no match
 ❌ c444b776: no match
 ✅ c48954c1: pattern2d from grid tiling
@@ -785,7 +785,7 @@
 ❌ cbded52d: no match
 ❌ cc9053aa: no match
 ✅ ccd554ac: pattern2d from grid tiling
-❌ cce03e0d: no match
+✅ cce03e0d: mask==least_common_color + tile=orig
 ❌ cd3c21df: no match
 ❌ cdecee7f: no match
 ❌ ce039d91: no match
