@@ -205,7 +205,7 @@
 ❌ 3906de3d: no match
 ❌ 396d80d7: no match
 ❌ 3979b1a8: no match
-❌ 39a8645d: no match
+✅ 39a8645d: most_frequent_object extraction at (np.int64(1), np.int64(4), np.int64(2), np.int64(5))
 ❌ 39e1d7f9: no match
 ❌ 3a301edc: no match
 ❌ 3aa6fb7a: no match
@@ -457,7 +457,7 @@
 ❌ 7acdf6d3: no match
 ❌ 7b6016b9: no match
 ❌ 7b7f7511: no match
-❌ 7bb29440: no match
+✅ 7bb29440: rectangle extraction at (np.int64(6), np.int64(10), np.int64(4), np.int64(10))
 ❌ 7c008303: no match
 ❌ 7c8af763: no match
 ❌ 7c9b52a0: no match

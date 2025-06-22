@@ -1681,6 +1681,188 @@ def debug_task(task_id, dataset_path="./", verbose=False):
             except Exception as e:
                 print(f"    Błąd wykonania: {e}")
 
+    # Dodatkowe debugowanie dla zadania 7bb29440
+    if task_id == "7bb29440" and verbose:
+        print("\n🔍 SZCZEGÓŁOWA ANALIZA ZADANIA 7bb29440")
+        print("=" * 50)
+        
+        print(f"Input shape: {input_grid.shape()}")
+        print(f"Output shape: {output_grid.shape()}")
+        print(f"Input grid:\n{input_grid.pixels}")
+        print(f"Output grid:\n{output_grid.pixels}")
+        
+        # Analiza obiektów w input
+        input_views = extract_all_object_views(input_grid)
+        print(f"\n📊 OBIEKTY W INPUT:")
+        for view_name, objects in input_views.items():
+            print(f"\n{view_name}:")
+            for i, obj in enumerate(objects):
+                features = obj.features()
+                print(f"  Obiekt {i+1}: bbox={obj.bbox}, area={features['area']}, "
+                      f"num_holes={features['num_holes']}, main_color={features['main_color']}, "
+                      f"shape_type={features['shape_type']}, touches_border={features['touches_border']}")
+        
+        # Analiza obiektów w output
+        output_views = extract_all_object_views(output_grid)
+        print(f"\n📊 OBIEKTY W OUTPUT:")
+        for view_name, objects in output_views.items():
+            print(f"\n{view_name}:")
+            for i, obj in enumerate(objects):
+                features = obj.features()
+                print(f"  Obiekt {i+1}: bbox={obj.bbox}, area={features['area']}, "
+                      f"num_holes={features['num_holes']}, main_color={features['main_color']}, "
+                      f"shape_type={features['shape_type']}, touches_border={features['touches_border']}")
+        
+        # Analiza specyficzna dla tego zadania - szukanie prostokątów z dziurami
+        print(f"\n🔍 ANALIZA PROSTOKĄTÓW Z DZIURAMI:")
+        
+        # Znajdź wszystkie prostokąty (obiekty o kształcie rectangle)
+        rectangles = []
+        for view_name, objects in input_views.items():
+            for obj in objects:
+                features = obj.features()
+                if features['shape_type'] == 'rectangle':
+                    rectangles.append((obj, features))
+        
+        print(f"Znalezione prostokąty: {len(rectangles)}")
+        for i, (obj, features) in enumerate(rectangles):
+            print(f"  Prostokąt {i+1}: bbox={obj.bbox}, area={features['area']}, "
+                  f"num_holes={features['num_holes']}, main_color={features['main_color']}")
+            
+            # Sprawdź czy ten prostokąt pasuje do output
+            if obj.bbox[1] - obj.bbox[0] == output_grid.shape()[0] and obj.bbox[3] - obj.bbox[2] == output_grid.shape()[1]:
+                print(f"    ⚠️  Rozmiar pasuje do output!")
+                # Sprawdź czy zawartość pasuje
+                y1, y2, x1, x2 = obj.bbox
+                subgrid = input_grid.crop(y1, y2, x1, x2)
+                diff = np.sum(subgrid.pixels != output_grid.pixels)
+                print(f"    Różnica z output: {diff}")
+                if diff == 0:
+                    print(f"    ✅ DOKŁADNE DOPASOWANIE!")
+                    return True, f"rectangle extraction at {obj.bbox}"
+        
+        # Sprawdź czy output jest wycięciem z input (standardowe sprawdzenie)
+        print(f"\n🔍 SPRAWDZENIE CUT-OUT:")
+        ih, iw = input_grid.shape()
+        oh, ow = output_grid.shape()
+        
+        if ih >= oh and iw >= ow:
+            print(f"Output może być wycięciem z input")
+            for y in range(ih - oh + 1):
+                for x in range(iw - ow + 1):
+                    subgrid = input_grid.crop(y, y + oh, x, x + ow)
+                    if np.array_equal(subgrid.pixels, output_grid.pixels):
+                        print(f"✅ ZNALEZIONO DOKŁADNE CUT-OUT: ({y}:{y+oh}, {x}:{x+ow})")
+                        return True, f"cut-out at ({y}:{y+oh}, {x}:{x+ow})"
+                    else:
+                        # Pokaż różnice dla bliskich dopasowań
+                        diff = np.sum(subgrid.pixels != output_grid.pixels)
+                        if diff <= 5:  # Pokaż bliskie dopasowania
+                            print(f"  Blisko: diff={diff} @ ({y}:{y+oh}, {x}:{x+ow})")
+        else:
+            print(f"Output nie może być wycięciem z input (za duży)")
+
+    # Dodatkowe debugowanie dla zadania 39a8645d
+    if task_id == "39a8645d" and verbose:
+        print("\n🔍 SZCZEGÓŁOWA ANALIZA ZADANIA 39a8645d")
+        print("=" * 50)
+        
+        print(f"Input shape: {input_grid.shape()}")
+        print(f"Output shape: {output_grid.shape()}")
+        print(f"Input grid:\n{input_grid.pixels}")
+        print(f"Output grid:\n{output_grid.pixels}")
+        
+        # Analiza obiektów w input
+        input_views = extract_all_object_views(input_grid)
+        print(f"\n📊 OBIEKTY W INPUT:")
+        for view_name, objects in input_views.items():
+            print(f"\n{view_name}:")
+            for i, obj in enumerate(objects):
+                features = obj.features()
+                print(f"  Obiekt {i+1}: bbox={obj.bbox}, area={features['area']}, "
+                      f"num_holes={features['num_holes']}, main_color={features['main_color']}, "
+                      f"shape_type={features['shape_type']}, touches_border={features['touches_border']}")
+        
+        # Analiza obiektów w output
+        output_views = extract_all_object_views(output_grid)
+        print(f"\n📊 OBIEKTY W OUTPUT:")
+        for view_name, objects in output_views.items():
+            print(f"\n{view_name}:")
+            for i, obj in enumerate(objects):
+                features = obj.features()
+                print(f"  Obiekt {i+1}: bbox={obj.bbox}, area={features['area']}, "
+                      f"num_holes={features['num_holes']}, main_color={features['main_color']}, "
+                      f"shape_type={features['shape_type']}, touches_border={features['touches_border']}")
+        
+        # Analiza specyficzna dla tego zadania - szukanie najczęściej powtarzających się obiektów
+        print(f"\n🔍 ANALIZA POWTARZAJĄCYCH SIĘ OBIEKTÓW:")
+        
+        # Zbierz wszystkie obiekty z różnych widoków
+        all_objects = []
+        for view_name, objects in input_views.items():
+            all_objects.extend(objects)
+        
+        # Grupuj obiekty według podobieństwa (cechy)
+        object_groups = group_similar_objects(all_objects)
+        print(f"Znalezione grupy obiektów: {len(object_groups)}")
+        
+        for i, (group_features, objects) in enumerate(object_groups.items()):
+            print(f"  Grupa {i+1}: {len(objects)} obiektów, cechy: {group_features}")
+            
+            # Sprawdź czy któryś obiekt z tej grupy pasuje do output
+            for obj in objects:
+                if obj.bbox[1] - obj.bbox[0] == output_grid.shape()[0] and obj.bbox[3] - obj.bbox[2] == output_grid.shape()[1]:
+                    print(f"    ⚠️  Rozmiar pasuje do output!")
+                    # Sprawdź czy zawartość pasuje
+                    y1, y2, x1, x2 = obj.bbox
+                    subgrid = input_grid.crop(y1, y2, x1, x2)
+                    diff = np.sum(subgrid.pixels != output_grid.pixels)
+                    print(f"    Różnica z output: {diff}")
+                    if diff == 0:
+                        print(f"    ✅ DOKŁADNE DOPASOWANIE!")
+                        return True, f"most_frequent_object extraction at {obj.bbox}"
+        
+        # Sprawdź czy output jest wycięciem z input (standardowe sprawdzenie)
+        print(f"\n🔍 SPRAWDZENIE CUT-OUT:")
+        ih, iw = input_grid.shape()
+        oh, ow = output_grid.shape()
+        
+        if ih >= oh and iw >= ow:
+            print(f"Output może być wycięciem z input")
+            for y in range(ih - oh + 1):
+                for x in range(iw - ow + 1):
+                    subgrid = input_grid.crop(y, y + oh, x, x + ow)
+                    if np.array_equal(subgrid.pixels, output_grid.pixels):
+                        print(f"✅ ZNALEZIONO DOKŁADNE CUT-OUT: ({y}:{y+oh}, {x}:{x+ow})")
+                        return True, f"cut-out at ({y}:{y+oh}, {x}:{x+ow})"
+                    else:
+                        # Pokaż różnice dla bliskich dopasowań
+                        diff = np.sum(subgrid.pixels != output_grid.pixels)
+                        if diff <= 5:  # Pokaż bliskie dopasowania
+                            print(f"  Blisko: diff={diff} @ ({y}:{y+oh}, {x}:{x+ow})")
+        else:
+            print(f"Output nie może być wycięciem z input (za duży)")
+
+    # OGÓLNA HEURYSTYKA OBJECT EXTRACTION
+    if verbose:
+        print(f"\n🔍 OGÓLNA HEURYSTYKA OBJECT EXTRACTION:")
+        
+        # 1. Sprawdź czy output jest wycięciem z input (standardowe)
+        ih, iw = input_grid.shape()
+        oh, ow = output_grid.shape()
+        
+        if ih >= oh and iw >= ow:
+            for y in range(ih - oh + 1):
+                for x in range(iw - ow + 1):
+                    subgrid = input_grid.crop(y, y + oh, x, x + ow)
+                    if np.array_equal(subgrid.pixels, output_grid.pixels):
+                        return True, f"cut-out at ({y}:{y+oh}, {x}:{x+ow})"
+        
+        # 2. Sprawdź object-based extraction
+        result = try_object_extraction(input_grid, output_grid, verbose)
+        if result:
+            return result
+
     candidates = generate_candidate_programs(input_grid, output_grid, verbose=verbose)
     for program, explanation in candidates:
         try:
@@ -1700,8 +1882,8 @@ def debug_many_tasks(task_ids, dataset_path="./"):
     for task_id in task_ids:
         print(f"===== {task_id} =====")
         try:
-            # Debugowanie dla zadań 358ba94e i 73ccf9c2
-            verbose_debug = (task_id == "358ba94e" or task_id == "73ccf9c2")
+            # Debugowanie dla zadań 358ba94e, 73ccf9c2 i 7bb29440
+            verbose_debug = (task_id == "358ba94e" or task_id == "73ccf9c2" or task_id == "7bb29440" or task_id == "39a8645d")
             ok, why = debug_task(task_id, dataset_path, verbose=verbose_debug)
             if ok:
                 print(f"✅ {task_id} passed via {why}")
@@ -1736,6 +1918,128 @@ def get_all_task_ids_from_json(dataset_path="./"):
         challenges = json.load(f)
     return list(challenges.keys())
 
+def group_similar_objects(objects: List[GridObject]) -> Dict[tuple, List[GridObject]]:
+    """
+    Grupuje obiekty według podobieństwa cech.
+    Zwraca słownik: (cechy) -> lista podobnych obiektów
+    """
+    groups = {}
+    
+    for obj in objects:
+        features = obj.features()
+        # Klucz grupy: najważniejsze cechy dla porównania
+        key = (
+            features['shape_type'],
+            features['main_color'],
+            features['area'],
+            features['num_holes']
+        )
+        
+        if key not in groups:
+            groups[key] = []
+        groups[key].append(obj)
+    
+    return groups
+
+def try_object_extraction(input_grid: Grid, output_grid: Grid, verbose=False) -> Optional[Tuple[bool, str]]:
+    """
+    Ogólna heurystyka object extraction - próbuje różne reguły wyciągania obiektów.
+    """
+    input_views = extract_all_object_views(input_grid)
+    output_views = extract_all_object_views(output_grid)
+    
+    # Zbierz wszystkie obiekty z input
+    all_input_objects = []
+    for view_name, objects in input_views.items():
+        all_input_objects.extend(objects)
+    
+    # Zbierz wszystkie obiekty z output
+    all_output_objects = []
+    for view_name, objects in output_views.items():
+        all_output_objects.extend(objects)
+    
+    if verbose:
+        print(f"  Analizuję {len(all_input_objects)} obiektów input vs {len(all_output_objects)} obiektów output")
+    
+    # Reguła 1: Najczęściej powtarzający się obiekt
+    if len(all_output_objects) == 1:
+        output_obj = all_output_objects[0]
+        output_features = output_obj.features()
+        
+        # Grupuj obiekty input według podobieństwa
+        object_groups = group_similar_objects(all_input_objects)
+        
+        # Znajdź grupę z największą liczbą obiektów
+        largest_group = max(object_groups.items(), key=lambda x: len(x[1]))
+        group_features, group_objects = largest_group
+        
+        if verbose:
+            print(f"  Największa grupa: {len(group_objects)} obiektów z cechami {group_features}")
+        
+        # Sprawdź czy któryś obiekt z tej grupy pasuje do output
+        for obj in group_objects:
+            if obj.bbox[1] - obj.bbox[0] == output_grid.shape()[0] and obj.bbox[3] - obj.bbox[2] == output_grid.shape()[1]:
+                y1, y2, x1, x2 = obj.bbox
+                subgrid = input_grid.crop(y1, y2, x1, x2)
+                if np.array_equal(subgrid.pixels, output_grid.pixels):
+                    return True, f"most_frequent_object extraction at {obj.bbox}"
+    
+    # Reguła 2: Obiekt z najmniejszą liczbą dziur
+    if len(all_output_objects) == 1:
+        output_obj = all_output_objects[0]
+        output_holes = output_obj.features()['num_holes']
+        
+        # Znajdź obiekt input z najmniejszą liczbą dziur
+        min_holes_obj = min(all_input_objects, key=lambda obj: obj.features()['num_holes'])
+        min_holes = min_holes_obj.features()['num_holes']
+        
+        if verbose:
+            print(f"  Obiekt z najmniejszą liczbą dziur: {min_holes} dziur")
+        
+        if min_holes_obj.bbox[1] - min_holes_obj.bbox[0] == output_grid.shape()[0] and min_holes_obj.bbox[3] - min_holes_obj.bbox[2] == output_grid.shape()[1]:
+            y1, y2, x1, x2 = min_holes_obj.bbox
+            subgrid = input_grid.crop(y1, y2, x1, x2)
+            if np.array_equal(subgrid.pixels, output_grid.pixels):
+                return True, f"min_holes_object extraction at {min_holes_obj.bbox}"
+    
+    # Reguła 3: Obiekt o największym rozmiarze
+    if len(all_output_objects) == 1:
+        output_obj = all_output_objects[0]
+        output_area = output_obj.features()['area']
+        
+        # Znajdź obiekt input o największym rozmiarze
+        max_area_obj = max(all_input_objects, key=lambda obj: obj.features()['area'])
+        max_area = max_area_obj.features()['area']
+        
+        if verbose:
+            print(f"  Obiekt o największym rozmiarze: {max_area} pikseli")
+        
+        if max_area_obj.bbox[1] - max_area_obj.bbox[0] == output_grid.shape()[0] and max_area_obj.bbox[3] - max_area_obj.bbox[2] == output_grid.shape()[1]:
+            y1, y2, x1, x2 = max_area_obj.bbox
+            subgrid = input_grid.crop(y1, y2, x1, x2)
+            if np.array_equal(subgrid.pixels, output_grid.pixels):
+                return True, f"max_area_object extraction at {max_area_obj.bbox}"
+    
+    # Reguła 4: Obiekt o najmniejszym rozmiarze
+    if len(all_output_objects) == 1:
+        output_obj = all_output_objects[0]
+        output_area = output_obj.features()['area']
+        
+        # Znajdź obiekt input o najmniejszym rozmiarze
+        min_area_obj = min(all_input_objects, key=lambda obj: obj.features()['area'])
+        min_area = min_area_obj.features()['area']
+        
+        if verbose:
+            print(f"  Obiekt o najmniejszym rozmiarze: {min_area} pikseli")
+        
+        if min_area_obj.bbox[1] - min_area_obj.bbox[0] == output_grid.shape()[0] and min_area_obj.bbox[3] - min_area_obj.bbox[2] == output_grid.shape()[1]:
+            y1, y2, x1, x2 = min_area_obj.bbox
+            subgrid = input_grid.crop(y1, y2, x1, x2)
+            if np.array_equal(subgrid.pixels, output_grid.pixels):
+                return True, f"min_area_object extraction at {min_area_obj.bbox}"
+    
+    return None
+
 if __name__ == "__main__":
     # # debug_task("0692e18c", dataset_path="dane/", verbose=True)
     TASK_IDS = get_all_task_ids_from_json("dane/")
@@ -1750,7 +2054,7 @@ if __name__ == "__main__":
     #     "9dfd6313", "a416b8f3", "a59b95c0", "ad7e01d0", "bc4146bd",
     #     "c3e719e8", "c48954c1", "c9e6f938", "ccd554ac", "cce03e0d",
     #     "cf5fd0ad", "ed36ccf7", "ed98d772",
-    #     "358ba94e", "73ccf9c2"
+    #     "358ba94e", "73ccf9c2", "7bb29440", "39a8645d"
     # ]
 
     # debug_many_tasks(TEST_TASK_IDS, dataset_path="dane/")
