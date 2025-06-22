@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import numpy as np
 import os
-from arc_agi_system import Grid
+from arc_agi_solver import Grid
 
 class TaskViewer:
     def __init__(self, challenges_path: str = None, solutions_path: str = None, output_dir: str = "task_views"):
@@ -133,5 +133,7 @@ def main():
         print("\nUżycie: python task_viewer.py <task_id>")
         print("Przykład: python task_viewer.py 09629e4f")
 
+
 if __name__ == "__main__":
-    main() 
+    viewer = TaskViewer()
+    viewer.save_task("358ba94e")

@@ -26,12 +26,6 @@
 # - submission.json musi zawierać DWIE próby dla każdego test inputu (nie można pomijać attempt_2).
 """
 
-import numpy as np
-import json
-import os
-from typing import List, Tuple, Dict, Optional
-from dataclasses import dataclass
-
 """
 ARC AGI Solver — Wersja obiektowa i DSL
 
@@ -47,6 +41,16 @@ Sekcje:
 - MASK + TILE ENGINE: stare heurystyki oparte na maskach
 - HEURYSTYKA: porównanie input/output, fallbacki
 """
+
+
+import numpy as np
+import json
+import os
+from typing import List, Tuple, Dict, Optional
+from dataclasses import dataclass
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+
 
 ### === GRID === ###
 # podstawowe operacje na siatkach
@@ -90,60 +94,105 @@ class Grid:
     def pad(self, pad_width, value=0):
         # Dodaje padding (ramkę) dookoła siatki, domyślnie wypełnioną zerami
         return Grid(np.pad(self.pixels, pad_width, constant_values=value))
+    
+    def plot(self, title="", task_id="", save=False):
+        """
+        Wyświetla lub zapisuje grid jako obrazek (PNG), z widoczną siatką komórek.
+        """
+        fig, ax = plt.subplots()
+        cmap = plt.get_cmap('tab20')
+        norm = mcolors.BoundaryNorm(boundaries=np.arange(21) - 0.5, ncolors=20)
+
+        # Wyświetlenie samego gridu
+        ax.imshow(self.pixels, cmap=cmap, norm=norm)
+
+        # Włączenie siatki (gridlines)
+        h, w = self.pixels.shape
+        ax.set_xticks(np.arange(-0.5, w, 1), minor=True)
+        ax.set_yticks(np.arange(-0.5, h, 1), minor=True)
+        ax.grid(which="minor", color="gray", linestyle=":", linewidth=0.5)
+        ax.tick_params(which="minor", size=0)
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+        ax.set_title(title)
+
+        if save:
+            filename = f"task_views/png/{task_id}_{title.replace(' ', '_')}.png"
+            plt.savefig(filename)
+            plt.close()
+        else:
+            plt.show()
+
+    def safe_pixels(self):
+        return np.array(self.pixels, copy=True)
 
 ### === OBJECT === ###
 # reprezentacja wyodrębnionych obiektów, bbox, maska, centroid, kolory
 class GridObject:
-    def __init__(self, pixels, mask=None):
-        # Obiekt wyodrębniony z grida (np. pojedynczy kształt, tło, symbol)
-        # pixels: pełny patch grida (wycinek siatki z bboxa), typowo Grid.pixels[y1:y2, x1:x2]
-        # mask: binarna maska 2D (bool), lokalna względem patcha (czyli mask.shape == pixels.shape)
-        # jeśli maska niepodana, przyjmujemy maskę: pixels > 0
+    def __init__(self, pixels, mask=None, global_position=(0, 0)):
+        """
+        Reprezentuje pojedynczy obiekt wykryty w gridzie ARC.
+        - pixels: lokalny patch wycięty z grida
+        - mask: binarna maska zaznaczająca piksele obiektu (względem patcha)
+        - global_position: (y, x) pozycji lewego górnego rogu patcha w oryginalnym gridzie
+        """
         self.grid = Grid(pixels)
         self.mask = np.array(mask, dtype=bool) if mask is not None else (self.grid.pixels > 0)
+        self.global_position = global_position  # ← pozycja globalna: (top_y, left_x)
 
-        # Bounding box (relatywny do oryginalnego grida): (top, bottom, left, right)
-        self.bbox = self.compute_bbox()
-
-        # Histogram kolorów w masce: {kolor: liczba wystąpień}
+        self.bbox = self.compute_bbox()          # ← wyliczany bbox względem całej siatki
         self.color_hist = self.color_distribution()
-
-        # Czy ten obiekt jest kandydatem na tło (inicjalnie False — do ustawienia ręcznego)
         self.is_background = False
 
     def compute_bbox(self):
-        # Oblicza najmniejszy prostokąt zawierający maskę (na podstawie maski)
+        """
+        Oblicza bbox względem oryginalnego grida na podstawie lokalnej maski
+        i globalnej pozycji patcha.
+        """
         ys, xs = np.where(self.mask)
-        if ys.size == 0: return (0, 0, 0, 0)  # pusty obiekt
-        return (ys.min(), ys.max() + 1, xs.min(), xs.max() + 1)
+        if ys.size == 0:
+            return (0, 0, 0, 0)
+        top, left = self.global_position
+        return (top + ys.min(), top + ys.max() + 1,
+                left + xs.min(), left + xs.max() + 1)
 
     def color_distribution(self):
-        # Zwraca histogram kolorów dla pikseli w masce
+        """
+        Histogram kolorów w obrębie maski.
+        """
         vals, counts = np.unique(self.grid.pixels[self.mask], return_counts=True)
         return dict(zip(map(int, vals), map(int, counts)))
 
     def extract_patch(self):
-        # Zwraca patch grida z wyciętym bboxem (bez maski)
-        y1, y2, x1, x2 = self.bbox
-        return self.grid.crop(y1, y2, x1, x2)
+        """
+        Zwraca patch grida odpowiadający tylko obiektowi (pixels ograniczony do maski).
+        """
+        return self.grid
 
     def area(self):
-        # Liczba aktywnych pikseli w masce (czyli powierzchnia obiektu)
+        """
+        Liczba aktywnych pikseli w masce (powierzchnia obiektu).
+        """
         return np.sum(self.mask)
 
     def centroid(self):
-        # Geometryczny środek masy obiektu (uśrednione współrzędne w obrębie maski)
+        """
+        Geometryczny środek masy obiektu (globalny).
+        """
         ys, xs = np.where(self.mask)
-        if len(ys) == 0: return (0, 0)
-        return (float(np.mean(ys)), float(np.mean(xs)))
+        if len(ys) == 0:
+            return (0, 0)
+        y0, x0 = self.global_position
+        return (float(np.mean(ys) + y0), float(np.mean(xs) + x0))
 
     def __repr__(self):
-        # Tekstowa reprezentacja obiektu: bbox, area, kolory
         y1, y2, x1, x2 = self.bbox
         return (f"<GridObject bbox=({y1},{y2},{x1},{x2}) "
                 f"area={self.area()} "
                 f"colors={self.color_hist} "
                 f"{'BACKGROUND' if self.is_background else ''}>")
+
     
     def features(self) -> dict:
         h, w = self.mask.shape
@@ -180,6 +229,11 @@ class GridObject:
             self.bbox[2] == 0 or
             self.bbox[3] == self.grid.shape()[1]
         )
+        # Liczba dziur (zera wewnątrz bboxa, poza maską)
+        patch = self.grid.pixels
+        hole_mask = (patch == 0) & (~self.mask)
+        structure = np.array([[0,1,0],[1,1,1],[0,1,0]])  # 4-sąsiedztwo
+        num_holes = label(hole_mask.astype(int), structure=structure)[1]
 
         return {
             "area": filled_area,
@@ -192,6 +246,7 @@ class GridObject:
             "main_color": main_color,
             "color_vector": color_vector,
             "touches_border": touches,
+            "num_holes": num_holes
         }
         
 
@@ -228,9 +283,9 @@ def extract_all_object_views(grid: Grid) -> dict[str, List[GridObject]]:
                     continue
                 y1, y2 = np.where(mask)[0].min(), np.where(mask)[0].max() + 1
                 x1, x2 = np.where(mask)[1].min(), np.where(mask)[1].max() + 1
-                patch = grid.pixels[y1:y2, x1:x2]
+                patch = grid.crop(y1, y2, x1, x2).pixels
                 local_mask = mask[y1:y2, x1:x2]
-                obj = GridObject(patch, mask=local_mask)
+                obj = GridObject(patch, mask=local_mask, global_position=(y1, x1))
                 color_objs.append(obj)
         _mark_background(color_objs, bg_color, H, W)
         views[f"conn{conn}_color"] = color_objs
@@ -245,14 +300,62 @@ def extract_all_object_views(grid: Grid) -> dict[str, List[GridObject]]:
                 continue
             y1, y2 = np.where(component)[0].min(), np.where(component)[0].max() + 1
             x1, x2 = np.where(component)[1].min(), np.where(component)[1].max() + 1
-            patch = grid.pixels[y1:y2, x1:x2]
+            patch = grid.crop(y1, y2, x1, x2).pixels
             local_mask = component[y1:y2, x1:x2]
-            obj = GridObject(patch, mask=local_mask)
+            obj =  GridObject(patch, mask=local_mask, global_position=(y1, x1))
             multicolor_objs.append(obj)
         _mark_background(multicolor_objs, bg_color, H, W)
         views[f"conn{conn}_multicolor"] = multicolor_objs
 
     return views
+
+from typing import List
+import numpy as np
+
+def detect_cut_out_candidate(task: dict) -> List["GridProgram"]:
+    """
+    Heurystyka wykrywająca czy output jest podsiatką inputu (cut-out).
+    Jeśli tak, zwraca GridProgram([Crop(...), opcjonalnie ResizeTo(...)])
+    """
+    programs = []
+
+    for train_example in task.get("train", []):
+        input_grid = Grid(train_example["input"])
+        output_grid = Grid(train_example["output"])
+
+        H_in, W_in = input_grid.shape()
+        H_out, W_out = output_grid.shape()
+
+        # Jeśli input nie jest większy od output, pomijamy
+        if H_in < H_out or W_in < W_out:
+            continue
+
+        # Bruteforce: przesuwamy okno outputowego rozmiaru po input
+        for y in range(H_in - H_out + 1):
+            for x in range(W_in - W_out + 1):
+                subgrid = input_grid.crop(y, y + H_out, x, x + W_out)
+
+                # Diagnoza: czy blisko?
+                if subgrid.pixels.shape == output_grid.pixels.shape:
+                    diff = np.sum(subgrid.pixels != output_grid.pixels)
+                    if diff <= 3:
+                        print(f"[cutout] Prawie match: diff={diff} @ ({y},{x})")
+
+                if np.array_equal(subgrid.pixels, output_grid.pixels):
+                    print(f"[cutout] MATCH @ ({y}:{y+H_out}, {x}:{x+W_out})")
+
+                    crop_op = CropGrid(y, y + H_out, x, x + W_out)
+                    prog = GridProgram([crop_op])
+                    programs.append(prog)
+
+                    # Jeśli rozmiar jest inny — dodajemy resize
+                    if output_grid.shape() != (H_out, W_out):
+                        resize_op = ResizeGridTo(*output_grid.shape())
+                        prog = GridProgram([crop_op, resize_op])
+                        programs.append(prog)
+
+    return programs
+
 
 
 def _mark_background(objs, bg_color, grid_h, grid_w):
@@ -387,6 +490,34 @@ def print_matches(matches: List[Tuple[GridObject, GridObject, dict]]):
             print(" ✅ Brak różnic")
         print()
 
+def match_object_to_input(output_obj: GridObject, input_objects: List[GridObject]) -> Optional[GridObject]:
+    """
+    Znajdź obiekt wejściowy najbardziej podobny do danego obiektu wyjściowego.
+    Porównuje tylko cechy (na razie: area, num_holes, shape_type).
+    """
+    best_score = float("inf")
+    best_match = None
+
+    output_feat = output_obj.features()
+
+    for input_obj in input_objects:
+        input_feat = input_obj.features()
+        score = 0
+
+        # Kategoryczna cecha: typ kształtu
+        if input_feat["shape_type"] != output_feat["shape_type"]:
+            continue
+
+        # Porównywalne cechy liczbowe
+        score += abs(input_feat["area"] - output_feat["area"])
+        score += abs(input_feat["num_holes"] - output_feat["num_holes"])
+
+        if score < best_score:
+            best_score = score
+            best_match = input_obj
+
+    return best_match
+
 
 ### === TRANSFORM === ###
 # class Transform, apply_grid_transform, detect_transformation
@@ -495,15 +626,33 @@ class Recolor(Operation):
 
 
 class Sequence(Operation):
-    def __init__(self, steps):
-        # Kompozycja operacji: stosuj po kolei
-        self.steps = steps
+    def __init__(self, operations: List[Operation]):
+        self.operations = operations
 
-    def apply(self, obj: GridObject) -> GridObject:
-        for op in self.steps:
-            obj = op.apply(obj)
-        return obj
+    def __repr__(self):
+        return f"Sequence({', '.join(repr(op) for op in self.operations)})"
 
+    def apply(self, obj: GridObject, grid_shape: Tuple[int, int]) -> Optional[GridObject]:
+        current_obj = obj
+        for op in self.operations:
+            if current_obj is None:
+                return None
+            if isinstance(op, Operation):
+                current_obj = op.apply(current_obj, grid_shape)
+        return current_obj
+
+class Crop:
+    def __init__(self, y1, y2, x1, x2):
+        self.y1 = y1
+        self.y2 = y2
+        self.x1 = x1
+        self.x2 = x2
+
+    def apply(self, grid: Grid) -> Grid:
+        return grid.crop(self.y1, self.y2, self.x1, self.x2)
+
+    def __repr__(self):
+        return f"Crop(y1={self.y1}, y2={self.y2}, x1={self.x1}, x2={self.x2})"
 
 class Identity(Operation):
     def apply(self, obj: GridObject) -> GridObject:
@@ -520,146 +669,268 @@ def run_program(program, grid: Grid) -> Grid:
     obj = GridObject(grid.pixels)
     return program.apply(obj).grid
 
-class DSLOp:
-    """
-    Bazowa klasa operacji DSL. Wszystkie operacje dziedziczą po niej
-    i muszą zaimplementować apply(grid, objects) → (new_grid, new_objects)
-    """
-    def apply(self, grid: Grid, objects: List[GridObject]) -> Tuple[Grid, List[GridObject]]:
-        raise NotImplementedError
-
-
-class Translate(DSLOp):
-    """
-    Przesuwa obiekt o (dx, dy) — bez kolizji. Modyfikuje grid i odświeża obiekty.
-    """
-    def __init__(self, obj_id, dx, dy):
-        self.obj_id = obj_id
+class Translate(Operation):
+    def __init__(self, dx: int, dy: int):
         self.dx = dx
         self.dy = dy
 
-    def apply(self, grid, objects):
-        obj = objects[self.obj_id]
-        new_pixels = np.copy(grid.pixels)
+    def __repr__(self):
+        return f"Translate(dx={self.dx}, dy={self.dy})"
 
-        # Wymaż stary obiekt
-        y1, y2, x1, x2 = obj.bbox
-        new_pixels[y1:y2, x1:x2][obj.mask] = 0
+    def apply(self, obj: GridObject, grid_shape: Tuple[int, int]) -> Optional[GridObject]:
+        H, W = grid_shape
+        y1, x1 = obj.global_position
+        ys, xs = np.where(obj.mask)
 
-        # Wstaw w nowym miejscu
-        for (yy, xx), val in np.ndenumerate(obj.mask):
-            if not val:
-                continue
-            ny = y1 + yy + self.dy
-            nx = x1 + xx + self.dx
-            if 0 <= ny < grid.pixels.shape[0] and 0 <= nx < grid.pixels.shape[1]:
-                new_pixels[ny, nx] = obj.grid.pixels[yy, xx]
+        canvas = np.zeros((H, W), dtype=int)
+        mask_canvas = np.zeros((H, W), dtype=bool)
 
-        new_grid = Grid(new_pixels)
-        new_objs = extract_all_object_views(new_grid)["conn4_color"]  # uproszczona rekonstrukcja
-        return new_grid, new_objs
+        print(f"\n🧪 Translate: dx={self.dx}, dy={self.dy}")
+        for i in range(len(ys)):
+            y_src = ys[i]
+            x_src = xs[i]
+            val = obj.grid.pixels[y_src, x_src]
 
+            # Oblicz nową pozycję w gridzie globalnym
+            y_target = y1 + y_src + self.dy
+            x_target = x1 + x_src + self.dx
 
-class DropToContact(DSLOp):
-    """
-    Przesuwa obiekt w pionie lub poziomie aż do kontaktu z innym obiektem lub brzegiem.
-    direction = +1 (w dół/prawo), -1 (w górę/lewo)
-    """
-    def __init__(self, obj_id, axis='y', direction=1):
-        self.obj_id = obj_id
-        self.axis = axis
+            if 0 <= y_target < H and 0 <= x_target < W:
+                canvas[y_target, x_target] = val
+                mask_canvas[y_target, x_target] = True
+                print(f"  ↪ ({y_src},{x_src}) → ({y_target},{x_target}) = {val}")
+            else:
+                print(f"  ❌ OUT OF BOUNDS: ({y_target},{x_target})")
+
+        # Wyciągnij patch i maskę
+        ys_new, xs_new = np.where(mask_canvas)
+        if len(ys_new) == 0:
+            return None
+
+        y1_, y2_ = ys_new.min(), ys_new.max() + 1
+        x1_, x2_ = xs_new.min(), xs_new.max() + 1
+        patch = canvas[y1_:y2_, x1_:x2_]
+        local_mask = mask_canvas[y1_:y2_, x1_:x2_]
+
+        return GridObject(patch, mask=local_mask, global_position=(y1_, x1_))
+    
+class MoveToBorder(Operation):
+    def __init__(self, direction: str):
+        if direction not in {"up", "down", "left", "right"}:
+            raise ValueError("Invalid direction")
         self.direction = direction
 
-    def apply(self, grid, objects):
-        obj = objects[self.obj_id]
-        mask = obj.mask
+    def __repr__(self):
+        return f"MoveToBorder('{self.direction}')"
+
+    def apply(self, obj: GridObject, grid_shape: Tuple[int, int]) -> Optional[GridObject]:
+        """
+        Przesuwa obiekt do wskazanej krawędzi gridu (up/down/left/right).
+        """
+        H, W = grid_shape
         y1, y2, x1, x2 = obj.bbox
 
-        max_steps = grid.pixels.shape[0] if self.axis == 'y' else grid.pixels.shape[1]
-        step = 0
+        if self.direction == "up":
+            return Translate(dx=0, dy=-y1).apply(obj, grid_shape)
+        elif self.direction == "down":
+            return Translate(dx=0, dy=H - y2).apply(obj, grid_shape)
+        elif self.direction == "left":
+            return Translate(dx=-x1, dy=0).apply(obj, grid_shape)
+        elif self.direction == "right":
+            return Translate(dx=W - x2, dy=0).apply(obj, grid_shape)
 
-        while step < max_steps:
-            step += 1
-            collision = False
-            for (yy, xx), val in np.ndenumerate(mask):
-                if not val:
-                    continue
-                gy = y1 + yy + (step * self.direction if self.axis == 'y' else 0)
-                gx = x1 + xx + (step * self.direction if self.axis == 'x' else 0)
-                if not (0 <= gy < grid.pixels.shape[0] and 0 <= gx < grid.pixels.shape[1]):
-                    collision = True
-                    break
-                if grid.pixels[gy, gx] != 0:
-                    collision = True
-                    break
-            if collision:
-                step -= 1
-                break
+class MoveToTouch(Operation):
+    def __init__(self, target_color: int, direction: str):
+        if direction not in {"up", "down", "left", "right"}:
+            raise ValueError("Invalid direction")
+        self.target_color = target_color
+        self.direction = direction
 
-        final_dx = step * self.direction if self.axis == 'x' else 0
-        final_dy = step * self.direction if self.axis == 'y' else 0
-        return Translate(self.obj_id, final_dx, final_dy).apply(grid, objects)
+    def __repr__(self):
+        return f"MoveToTouch(color={self.target_color}, dir='{self.direction}')"
+
+    def apply(self, obj: GridObject, grid_shape: Tuple[int, int], full_grid: Optional[Grid] = None) -> Optional[GridObject]:
+        if full_grid is None:
+            raise ValueError("MoveToTouch requires access to the full input grid.")
+
+        max_steps = grid_shape[0] + grid_shape[1]
+        current_obj = obj
+
+        for _ in range(max_steps):
+            if self._touches_color(current_obj, self.target_color, grid_shape, full_grid):
+                return current_obj
+
+            dx, dy = {
+                "up":    (0, -1),
+                "down":  (0, 1),
+                "left":  (-1, 0),
+                "right": (1, 0),
+            }[self.direction]
+
+            current_obj = Translate(dx, dy).apply(current_obj, grid_shape)
+            if current_obj is None:
+                return None
+        return None
+
+    def _touches_color(self, obj: GridObject, target_color: int, grid_shape: Tuple[int, int], full_grid: Grid) -> bool:
+        y1, x1 = obj.global_position
+        ys, xs = np.where(obj.mask)
+
+        for i in range(len(ys)):
+            y_abs = y1 + ys[i]
+            x_abs = x1 + xs[i]
+
+            for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                ny, nx = y_abs + dy, x_abs + dx
+                if 0 <= ny < grid_shape[0] and 0 <= nx < grid_shape[1]:
+                    if full_grid.pixels[ny, nx] == target_color:
+                        return True
+        return False
+
+class CropFromInput(Operation):
+    def __init__(self, y1: int, y2: int, x1: int, x2: int):
+        self.y1 = y1
+        self.y2 = y2
+        self.x1 = x1
+        self.x2 = x2
+
+    def __repr__(self):
+        return f"CropFromInput(y1={self.y1}, y2={self.y2}, x1={self.x1}, x2={self.x2})"
+
+    def apply(self, input_grid: Grid, *_args, **_kwargs) -> Grid:
+        """
+        Zwraca wycięty fragment input grida jako nowy Grid.
+        Nie wymaga GridObject.
+        """
+        return input_grid.crop(self.y1, self.y2, self.x1, self.x2)
+    
+class ResizeTo(Operation):
+    def __init__(self, height: int, width: int):
+        self.height = height
+        self.width = width
+
+    def __repr__(self):
+        return f"ResizeTo({self.height}, {self.width})"
+
+    def apply(self, obj: GridObject, grid_shape: Tuple[int, int]) -> Optional[GridObject]:
+        """
+        Skalowanie obiektu (z zachowaniem jego maski) do nowego rozmiaru przez najprostszą interpolację.
+        """
+        from scipy.ndimage import zoom
+
+        h, w = obj.mask.shape
+        if h == 0 or w == 0:
+            return None
+
+        # Skaluje patch i maskę niezależnie (nearest dla maski)
+        zoom_h = self.height / h
+        zoom_w = self.width / w
+
+        new_patch = zoom(obj.pixels, (zoom_h, zoom_w), order=0)  # nearest
+        new_mask = zoom(obj.mask.astype(float), (zoom_h, zoom_w), order=0) > 0.5
+
+        return GridObject(new_patch, mask=new_mask)
+
+def run_program_on_objects(program: Operation, objects: List[GridObject], grid_shape: Tuple[int, int]) -> Grid:
+    new_grid = np.zeros(grid_shape, dtype=int)
+
+    for obj in objects:
+        new_obj = program.apply(obj, grid_shape)
+        if new_obj is None:
+            continue
+
+        y1, y2, x1, x2 = new_obj.bbox
+        patch = new_obj.extract_patch().pixels
+        mask = new_obj.mask
+
+        # 🛠 Ręczne przypisanie – gwarancja poprawności
+        for dy in range(y2 - y1):
+            for dx in range(x2 - x1):
+                if mask[dy, dx]:
+                    new_grid[y1 + dy, x1 + dx] = patch[dy, dx]
+
+    return Grid(new_grid)
+
+# === GRID PROGRAM DSL (Heurystyki na całym gridzie) ===
+
+class Grid:
+    def __init__(self, pixels):
+        self.pixels = np.array(pixels, dtype=int, copy=True)  # 🧼 wymuszamy pełną kopię danych
+
+    def shape(self):
+        return self.pixels.shape
+
+    def copy(self):
+        return Grid(np.array(self.pixels, copy=True))  # 🧼 bezpieczna kopia
+
+    def crop(self, y1, y2, x1, x2):
+        return Grid(np.array(self.pixels[y1:y2, x1:x2], copy=True))  # 🧼 crop zawsze jako kopia
+
+    def pad(self, pad_width, value=0):
+        return Grid(np.pad(self.pixels, pad_width, constant_values=value))
+
+    def flip(self, axis):
+        if axis == 'x': return Grid(np.flipud(self.pixels.copy()))
+        elif axis == 'y': return Grid(np.fliplr(self.pixels.copy()))
+        else: raise ValueError("Invalid axis")
+
+    def rotate(self, k=1):
+        return Grid(np.rot90(self.pixels.copy(), k))
+
+    def recolor(self, from_color, to_color):
+        new = np.array(self.pixels, copy=True)
+        new[new == from_color] = to_color
+        return Grid(new)
+
+    def safe_pixels(self):
+        return np.array(self.pixels, copy=True)  # 🧼 getter bez efektów ubocznych
 
 
-def run_program(grid: Grid, objects: List[GridObject], ops: List[DSLOp]) -> Tuple[Grid, List[GridObject]]:
-    """
-    Wykonuje sekwencję operacji DSL. Po każdej aktualizuje grid i obiekty.
-    """
-    for op in ops:
-        grid, objects = op.apply(grid, objects)
-    return grid, objects
+class GridProgram:
+    def __init__(self, operations: List):
+        self.operations = operations
+
+    def apply(self, grid: Grid) -> Optional[Grid]:
+        current = grid.copy()  # 🧼 nigdy nie modyfikujemy inputa
+        for op in self.operations:
+            current = op.apply(current)
+            if current is None:
+                return None
+        return current
+
+    def __repr__(self):
+        return "GridProgram[" + " >> ".join(op.__class__.__name__ for op in self.operations) + "]"
 
 
-### === HEURYSTYKI DETEKCJI OPERACJI === ###
-# Heurystyki wykrywające możliwe operacje na podstawie różnic input ↔ output
+class CropGrid:
+    def __init__(self, y1, y2, x1, x2):
+        self.y1 = y1
+        self.y2 = y2
+        self.x1 = x1
+        self.x2 = x2
 
-def detect_translate(obj_in: GridObject, obj_out: GridObject, diff: dict, obj_id: int) -> Optional[DSLOp]:
-    """
-    Wykrywa przesunięcie obiektu (Translate), jeśli jedyną różnicą jest pozycja.
-    """
-    keys = set(diff.keys())
-    allowed_keys = {"centroid", "bbox"}
-    if keys.issubset(allowed_keys):
-        dy = round(obj_out.centroid()[0] - obj_in.centroid()[0])
-        dx = round(obj_out.centroid()[1] - obj_in.centroid()[1])
-        return Translate(obj_id=obj_id, dx=dx, dy=dy)
-    return None
+    def apply(self, grid: Grid) -> Grid:
+        return grid.crop(self.y1, self.y2, self.x1, self.x2)
+
+    def __repr__(self):
+        return f"Crop({self.y1}:{self.y2}, {self.x1}:{self.x2})"
 
 
-class Recolor(DSLOp):
-    """
-    Zmienia kolor `from_color` na `to_color` w obrębie danego obiektu.
-    """
-    def __init__(self, obj_id, from_color, to_color):
-        self.obj_id = obj_id
-        self.from_color = from_color
-        self.to_color = to_color
+class ResizeGridTo:
+    def __init__(self, height, width):
+        self.height = height
+        self.width = width
 
-    def apply(self, grid, objects):
-        obj = objects[self.obj_id]
-        new_pixels = np.copy(grid.pixels)
-        y1, y2, x1, x2 = obj.bbox
-        mask = obj.mask
-        patch = obj.grid.pixels
+    def apply(self, grid: Grid) -> Grid:
+        from scipy.ndimage import zoom
+        h, w = grid.shape()
+        zoom_y = self.height / h
+        zoom_x = self.width / w
+        resized = zoom(grid.pixels, (zoom_y, zoom_x), order=0)
+        return Grid(np.array(resized, dtype=int, copy=True))
 
-        for (yy, xx), val in np.ndenumerate(mask):
-            if val and patch[yy, xx] == self.from_color:
-                new_pixels[y1 + yy, x1 + xx] = self.to_color
-
-        new_grid = Grid(new_pixels)
-        new_objs = extract_all_object_views(new_grid)["conn4_color"]
-        return new_grid, new_objs
-
-
-def detect_recolor(obj_in: GridObject, obj_out: GridObject, diff: dict, obj_id: int) -> Optional[DSLOp]:
-    """
-    Wykrywa zamianę koloru głównego obiektu (Recolor), jeśli to jedyna różnica.
-    """
-    if set(diff.keys()) == {"main_color"}:
-        from_color, to_color = diff["main_color"]
-        return Recolor(obj_id=obj_id, from_color=from_color, to_color=to_color)
-    return None
-
+    def __repr__(self):
+        return f"ResizeTo({self.height}x{self.width})"
 
 ### === COMPARISON === ###
 # statystyki input/output, detekcja rozmiaru kafla, dominujące kolory
@@ -861,8 +1132,12 @@ def try_masked_patterns(input_grid: Grid, output_grid: Grid, comparison) -> List
                 result = expand_pattern_2d(mask, tile, mode=mode)
                 if result.pixels.shape != output_grid.pixels.shape:
                     continue
-
-                if np.array_equal(result.pixels, output_grid.pixels):
+                #print(f"[check] From GridProgram: {program}") --TO JEST LINIJKA KTORA POWODUJE REGRESJE
+                print(f"[check] result.shape = {result.pixels.shape}, output.shape = {output_grid.pixels.shape}")
+                print(f"[check] result:\n{result.pixels}")
+                print(f"[check] output:\n{output_grid.pixels}")
+                print(f"[check] equal = {np.array_equal(result.pixels, output_grid.pixels)}")
+                if np.array_equal(result.pixels.astype(int), output_grid.pixels.astype(int)):
                     label = f"mask={mask_name} + tile={tile_name}"
                     candidates.append((result, label))
 
@@ -1145,6 +1420,20 @@ def generate_candidate_programs(input_grid: Grid, output_grid: Grid, verbose=Fal
     for result, label in try_masked_patterns(input_grid, output_grid, comparison):
         candidates.append((result, f"mask_tile_engine: {label}"))
 
+        # Heurystyka 8: cut-out detection
+    # Heurystyka: cut-out detection
+    cutout_task = {"train": [{"input": input_grid.pixels.tolist(), "output": output_grid.pixels.tolist()}]}
+    cutout_programs = detect_cut_out_candidate(cutout_task)
+
+    for program in cutout_programs:
+        try:
+            result = program.apply(input_grid)
+            if np.array_equal(result.pixels, output_grid.pixels):
+                candidates.append((program, "cut-out detection"))
+        except Exception as e:
+            if verbose:
+                print(f"[cutout] Błąd wykonania {program}: {e}")
+
     return candidates
 
 def debug_task(task_id, dataset_path="./", verbose=False):
@@ -1179,7 +1468,7 @@ def debug_many_tasks(task_ids, dataset_path="./"):
     for task_id in task_ids:
         print(f"===== {task_id} =====")
         try:
-            ok, why = debug_task(task_id, dataset_path, verbose=(task_id == "zxczxcZXC"))
+            ok, why = debug_task(task_id, dataset_path, verbose=(task_id == "358ba94e"))
             if ok:
                 print(f"✅ {task_id} passed via {why}")
                 success.append(task_id)
@@ -1214,38 +1503,22 @@ def get_all_task_ids_from_json(dataset_path="./"):
     return list(challenges.keys())
 
 if __name__ == "__main__":
-    # debug_task("0692e18c", dataset_path="dane/", verbose=True)
-    TASK_IDS = get_all_task_ids_from_json("dane/")
-    debug_many_tasks(TASK_IDS, dataset_path="dane/")
-    # TASK_IDS = [
-    #     "00576224", "007bbfb7", "0c786b71", "3af2c5a8", "3c9b0459",
-    #     "46442a0e", "48131b3c", "4c4377d9", "4e7e0eb9", "59341089",
-    #     "5b6cbef5", "6150a2bd", "62c24649", "67a3c6ac", "67e8384a",
-    #     "68b16354", "6d0aefbc", "6fa7a44f", "74dd1130", "7953d61e",
-    #     "7fe24cdd", "833dafe3", "8be77c9e", "8d5021e8", "90347967",
-    #     "9dfd6313", "a416b8f3", "a59b95c0", "bc4146bd", "c48954c1",
-    #     "c9e6f938", "ccd554ac", "cf5fd0ad", "ed36ccf7", "ed98d772",
-    #     "0692e18c" , "27f8ce4f" , "48f8583b"# ← nowe zadanie z heurystyką negującą kafel
-    # ]
+    # # debug_task("0692e18c", dataset_path="dane/", verbose=True)
+    # TASK_IDS = get_all_task_ids_from_json("dane/")
     # debug_many_tasks(TASK_IDS, dataset_path="dane/")
+    # TEST_TASK_IDS = ["358ba94e"]
+    TEST_TASK_IDS = [
+        "00576224", "007bbfb7", "0692e18c", "0c786b71", "15696249",
+        "27f8ce4f", "3af2c5a8", "3c9b0459", "46442a0e", "48131b3c",
+        "48f8583b", "4c4377d9", "4e7e0eb9", "59341089", "5b6cbef5",
+        "6150a2bd", "62c24649", "67a3c6ac", "67e8384a", "68b16354",
+        "6d0aefbc", "6fa7a44f", "74dd1130", "7953d61e", "7fe24cdd",
+        "833dafe3", "8be77c9e", "8d5021e8", "8e2edd66", "90347967",
+        "9dfd6313", "a416b8f3", "a59b95c0", "ad7e01d0", "bc4146bd",
+        "c3e719e8", "c48954c1", "c9e6f938", "ccd554ac", "cce03e0d",
+        "cf5fd0ad", "ed36ccf7", "ed98d772",
+        "358ba94e"
+    ]
 
+    debug_many_tasks(TEST_TASK_IDS, dataset_path="dane/")
 
-# if __name__ == "__main__":
-#     # Przykładowy grid
-#     raw = [
-#         [0, 0, 1, 1, 0],
-#         [0, 0, 1, 1, 0],
-#         [2, 2, 0, 0, 3],
-#         [2, 2, 0, 0, 3],
-#         [0, 0, 0, 0, 0]
-#     ]
-#     grid = Grid(raw)
-
-#     # Testuj ekstrakcję obiektów
-#     objs = extract_objects(grid, mode='connectivity')
-#     print(f"Wykryto {len(objs)} obiektów:")
-#     for i, obj in enumerate(objs):
-#         print(f"  {i+1}: {obj}")
-
-#     # Debugowo pokaż
-#     visualize_objects(grid, objs)
