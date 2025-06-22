@@ -50,6 +50,9 @@ from typing import List, Tuple, Dict, Optional
 from dataclasses import dataclass
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+from scipy.ndimage import label
+from collections import Counter
+from scipy.optimize import linear_sum_assignment
 
 
 ### === GRID === ###
@@ -58,7 +61,7 @@ class Grid:
     def __init__(self, pixels):
         # Reprezentuje pełną siatkę ARC (np. input lub output)
         # pixels: 2D numpy array (lub konwertowalny), typu int, kolory jako liczby
-        self.pixels = np.array(pixels, dtype=int)
+        self.pixels = np.array(pixels, dtype=int, copy=True)  # 🧼 wymuszamy pełną kopię danych
 
     def shape(self):
         # Zwraca krotkę (wysokość, szerokość)
@@ -66,30 +69,30 @@ class Grid:
 
     def copy(self):
         # Tworzy nową kopię grida (deep copy)
-        return Grid(self.pixels.copy())
+        return Grid(np.array(self.pixels, copy=True))  # 🧼 bezpieczna kopia
 
     def flip(self, axis):
         # Zwraca nowy Grid po odbiciu:
         # axis = 'x' → flip w pionie (góra-dół),
         # axis = 'y' → flip w poziomie (lewo-prawo)
-        if axis == 'x': return Grid(np.flipud(self.pixels))
-        elif axis == 'y': return Grid(np.fliplr(self.pixels))
+        if axis == 'x': return Grid(np.flipud(self.pixels.copy()))
+        elif axis == 'y': return Grid(np.fliplr(self.pixels.copy()))
         else: raise ValueError("Invalid axis")
 
     def rotate(self, k=1):
         # Rotacja o 90 stopni * k razy (domyślnie jedna rotacja w lewo)
-        return Grid(np.rot90(self.pixels, k))
+        return Grid(np.rot90(self.pixels.copy(), k))
 
     def recolor(self, from_color, to_color):
         # Zwraca grid, gdzie każdy piksel from_color jest zamieniony na to_color
-        new = self.pixels.copy()
+        new = np.array(self.pixels, copy=True)
         new[new == from_color] = to_color
         return Grid(new)
 
     def crop(self, y1, y2, x1, x2):
         # Zwraca prostokątny wycinek grida (subgrid)
         # Współrzędne odpowiadają indeksowaniu NumPy: [y1:y2, x1:x2]
-        return Grid(self.pixels[y1:y2, x1:x2])
+        return Grid(np.array(self.pixels[y1:y2, x1:x2], copy=True))  # 🧼 crop zawsze jako kopia
 
     def pad(self, pad_width, value=0):
         # Dodaje padding (ramkę) dookoła siatki, domyślnie wypełnioną zerami
@@ -125,7 +128,7 @@ class Grid:
             plt.show()
 
     def safe_pixels(self):
-        return np.array(self.pixels, copy=True)
+        return np.array(self.pixels, copy=True)  # 🧼 getter bez efektów ubocznych
 
 ### === OBJECT === ###
 # reprezentacja wyodrębnionych obiektów, bbox, maska, centroid, kolory
@@ -309,9 +312,6 @@ def extract_all_object_views(grid: Grid) -> dict[str, List[GridObject]]:
 
     return views
 
-from typing import List
-import numpy as np
-
 def detect_cut_out_candidate(task: dict) -> List["GridProgram"]:
     """
     Heurystyka wykrywająca czy output jest podsiatką inputu (cut-out).
@@ -367,9 +367,6 @@ def _mark_background(objs, bg_color, grid_h, grid_w):
                 obj.is_background = True
 
 def visualize_objects(grid: Grid, objects: List[GridObject]):
-    import matplotlib.pyplot as plt
-    import numpy as np
-
     pixels = grid.pixels
     h, w = pixels.shape
 
@@ -853,39 +850,6 @@ def run_program_on_objects(program: Operation, objects: List[GridObject], grid_s
 
 # === GRID PROGRAM DSL (Heurystyki na całym gridzie) ===
 
-class Grid:
-    def __init__(self, pixels):
-        self.pixels = np.array(pixels, dtype=int, copy=True)  # 🧼 wymuszamy pełną kopię danych
-
-    def shape(self):
-        return self.pixels.shape
-
-    def copy(self):
-        return Grid(np.array(self.pixels, copy=True))  # 🧼 bezpieczna kopia
-
-    def crop(self, y1, y2, x1, x2):
-        return Grid(np.array(self.pixels[y1:y2, x1:x2], copy=True))  # 🧼 crop zawsze jako kopia
-
-    def pad(self, pad_width, value=0):
-        return Grid(np.pad(self.pixels, pad_width, constant_values=value))
-
-    def flip(self, axis):
-        if axis == 'x': return Grid(np.flipud(self.pixels.copy()))
-        elif axis == 'y': return Grid(np.fliplr(self.pixels.copy()))
-        else: raise ValueError("Invalid axis")
-
-    def rotate(self, k=1):
-        return Grid(np.rot90(self.pixels.copy(), k))
-
-    def recolor(self, from_color, to_color):
-        new = np.array(self.pixels, copy=True)
-        new[new == from_color] = to_color
-        return Grid(new)
-
-    def safe_pixels(self):
-        return np.array(self.pixels, copy=True)  # 🧼 getter bez efektów ubocznych
-
-
 class GridProgram:
     def __init__(self, operations: List):
         self.operations = operations
@@ -1074,7 +1038,7 @@ def make_tile(input_grid: Grid, strategy: str) -> Grid:
     else:
         raise ValueError(f"Unknown tile strategy: {strategy}")
 
-def try_masked_patterns(input_grid: Grid, output_grid: Grid, comparison) -> List:
+def try_masked_patterns(input_grid: Grid, output_grid: Grid, comparison, verbose=False) -> List:
     # Próbuj różnych (mask, tile) par + copy_if_1, by zrekonstruować output
     # Strategia: heurystyczne dopasowanie kaflowe, starego typu
     ih, iw = input_grid.shape()
@@ -1132,11 +1096,12 @@ def try_masked_patterns(input_grid: Grid, output_grid: Grid, comparison) -> List
                 result = expand_pattern_2d(mask, tile, mode=mode)
                 if result.pixels.shape != output_grid.pixels.shape:
                     continue
-                #print(f"[check] From GridProgram: {program}") --TO JEST LINIJKA KTORA POWODUJE REGRESJE
-                print(f"[check] result.shape = {result.pixels.shape}, output.shape = {output_grid.pixels.shape}")
-                print(f"[check] result:\n{result.pixels}")
-                print(f"[check] output:\n{output_grid.pixels}")
-                print(f"[check] equal = {np.array_equal(result.pixels, output_grid.pixels)}")
+                # Sprawdzenie czy wynik pasuje do oczekiwanego outputu
+                if verbose:
+                    print(f"[check] result.shape = {result.pixels.shape}, output.shape = {output_grid.pixels.shape}")
+                    print(f"[check] result:\n{result.pixels}")
+                    print(f"[check] output:\n{output_grid.pixels}")
+                    print(f"[check] equal = {np.array_equal(result.pixels, output_grid.pixels)}")
                 if np.array_equal(result.pixels.astype(int), output_grid.pixels.astype(int)):
                     label = f"mask={mask_name} + tile={tile_name}"
                     candidates.append((result, label))
@@ -1380,16 +1345,18 @@ def generate_candidate_programs(input_grid: Grid, output_grid: Grid, verbose=Fal
         # Użyj najczęstszego koloru wprost
         hist = comparison.input_hist
         most_common_color = max(hist.items(), key=lambda x: x[1])[0]
-        print("[generate] używam raw dominant_color =", most_common_color)
+        if verbose:
+            print("[generate] używam raw dominant_color =", most_common_color)
 
         mask = (input_grid.pixels == most_common_color).astype(int)
         tile = input_grid.copy()
         result = expand_pattern_2d(Grid(mask), tile, mode='copy_if_1')
 
-        print("[generate] mask:\n", mask)
-        print("[generate] wynik heurystyki 5:\n", result.pixels)
-        print("[generate] oczekiwany output:\n", output_grid.pixels)
-        print("[generate] równość:", np.array_equal(result.pixels, output_grid.pixels))
+        if verbose:
+            print("[generate] mask:\n", mask)
+            print("[generate] wynik heurystyki 5:\n", result.pixels)
+            print("[generate] oczekiwany output:\n", output_grid.pixels)
+            print("[generate] równość:", np.array_equal(result.pixels, output_grid.pixels))
 
         if np.array_equal(result.pixels, output_grid.pixels):
             candidates.append((result, "mask==most_common_color + tile=orig"))
@@ -1402,22 +1369,24 @@ def generate_candidate_programs(input_grid: Grid, output_grid: Grid, verbose=Fal
     if (ih, iw) == (reps_y, reps_x):
         hist = comparison.input_hist
         least_common_color = min(hist.items(), key=lambda x: x[1])[0]
-        print("[generate] używam raw rare_color =", least_common_color)
+        if verbose:
+            print("[generate] używam raw rare_color =", least_common_color)
 
         mask = (input_grid.pixels == least_common_color).astype(int)
         tile = input_grid.copy()
         result = expand_pattern_2d(Grid(mask), tile, mode='copy_if_1')
 
-        print("[generate] mask:\n", mask)
-        print("[generate] wynik heurystyki 6:\n", result.pixels)
-        print("[generate] oczekiwany output:\n", output_grid.pixels)
-        print("[generate] równość:", np.array_equal(result.pixels, output_grid.pixels))
+        if verbose:
+            print("[generate] mask:\n", mask)
+            print("[generate] wynik heurystyki 6:\n", result.pixels)
+            print("[generate] oczekiwany output:\n", output_grid.pixels)
+            print("[generate] równość:", np.array_equal(result.pixels, output_grid.pixels))
 
         if np.array_equal(result.pixels, output_grid.pixels):
             candidates.append((result, "mask==least_common_color + tile=orig"))
 
         # Heurystyka 7: mask+tile engine
-    for result, label in try_masked_patterns(input_grid, output_grid, comparison):
+    for result, label in try_masked_patterns(input_grid, output_grid, comparison, verbose):
         candidates.append((result, f"mask_tile_engine: {label}"))
 
         # Heurystyka 8: cut-out detection
@@ -1449,6 +1418,55 @@ def debug_task(task_id, dataset_path="./", verbose=False):
     input_grid = Grid(input_data)
     output_grid = Grid(output_data)
 
+    # Dodatkowe debugowanie dla zadania 358ba94e
+    if task_id == "358ba94e" and verbose:
+        print("\n🔍 SZCZEGÓŁOWA ANALIZA ZADANIA 358ba94e")
+        print("=" * 50)
+        
+        # Analiza obiektów w input
+        input_views = extract_all_object_views(input_grid)
+        print(f"\n📊 OBIEKTY W INPUT:")
+        for view_name, objects in input_views.items():
+            print(f"\n{view_name}:")
+            for i, obj in enumerate(objects):
+                features = obj.features()
+                print(f"  Obiekt {i+1}: bbox={obj.bbox}, area={features['area']}, "
+                      f"num_holes={features['num_holes']}, main_color={features['main_color']}")
+        
+        # Analiza obiektów w output
+        output_views = extract_all_object_views(output_grid)
+        print(f"\n📊 OBIEKTY W OUTPUT:")
+        for view_name, objects in output_views.items():
+            print(f"\n{view_name}:")
+            for i, obj in enumerate(objects):
+                features = obj.features()
+                print(f"  Obiekt {i+1}: bbox={obj.bbox}, area={features['area']}, "
+                      f"num_holes={features['num_holes']}, main_color={features['main_color']}")
+        
+        # Sprawdź czy output jest wycięciem z input
+        print(f"\n🔍 SPRAWDZENIE CUT-OUT:")
+        print(f"Input shape: {input_grid.shape()}")
+        print(f"Output shape: {output_grid.shape()}")
+        
+        # Bruteforce sprawdzenie wszystkich możliwych wycięć
+        ih, iw = input_grid.shape()
+        oh, ow = output_grid.shape()
+        
+        if ih >= oh and iw >= ow:
+            print(f"Output może być wycięciem z input")
+            for y in range(ih - oh + 1):
+                for x in range(iw - ow + 1):
+                    subgrid = input_grid.crop(y, y + oh, x, x + ow)
+                    if np.array_equal(subgrid.pixels, output_grid.pixels):
+                        print(f"✅ ZNALEZIONO CUT-OUT: ({y}:{y+oh}, {x}:{x+ow})")
+                        return True, f"cut-out at ({y}:{y+oh}, {x}:{x+ow})"
+                    elif verbose:
+                        diff = np.sum(subgrid.pixels != output_grid.pixels)
+                        if diff <= 5:  # Pokaż bliskie dopasowania
+                            print(f"  Blisko: diff={diff} @ ({y}:{y+oh}, {x}:{x+ow})")
+        else:
+            print(f"Output nie może być wycięciem z input (za duży)")
+
     candidates = generate_candidate_programs(input_grid, output_grid, verbose=verbose)
     for program, explanation in candidates:
         try:
@@ -1468,7 +1486,9 @@ def debug_many_tasks(task_ids, dataset_path="./"):
     for task_id in task_ids:
         print(f"===== {task_id} =====")
         try:
-            ok, why = debug_task(task_id, dataset_path, verbose=(task_id == "358ba94e"))
+            # Debugowanie tylko dla zadania 358ba94e
+            verbose_debug = (task_id == "358ba94e")
+            ok, why = debug_task(task_id, dataset_path, verbose=verbose_debug)
             if ok:
                 print(f"✅ {task_id} passed via {why}")
                 success.append(task_id)

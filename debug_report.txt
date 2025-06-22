@@ -41,4 +41,4 @@
 ✅ cf5fd0ad: pattern2d from grid tiling
 ✅ ed36ccf7: global_transform: flip_x
 ✅ ed98d772: pattern2d from grid tiling
-❌ 358ba94e: no match
+✅ 358ba94e: cut-out at (1:6, 12:17)
