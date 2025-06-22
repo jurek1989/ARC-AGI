@@ -316,6 +316,7 @@ def detect_cut_out_candidate(task: dict) -> List["GridProgram"]:
     """
     Heurystyka wykrywająca czy output jest podsiatką inputu (cut-out).
     Jeśli tak, zwraca GridProgram([Crop(...), opcjonalnie ResizeTo(...)])
+    Teraz z priorytetyzacją na podstawie cech obiektów w wycięciu.
     """
     programs = []
 
@@ -331,32 +332,160 @@ def detect_cut_out_candidate(task: dict) -> List["GridProgram"]:
             continue
 
         # Bruteforce: przesuwamy okno outputowego rozmiaru po input
+        best_cutout = None
+        best_score = -1
+        
         for y in range(H_in - H_out + 1):
             for x in range(W_in - W_out + 1):
                 subgrid = input_grid.crop(y, y + H_out, x, x + W_out)
 
-                # Diagnoza: czy blisko?
-                if subgrid.pixels.shape == output_grid.pixels.shape:
-                    diff = np.sum(subgrid.pixels != output_grid.pixels)
-                    if diff <= 3:
-                        print(f"[cutout] Prawie match: diff={diff} @ ({y},{x})")
-
+                # Sprawdź czy to dokładne dopasowanie
                 if np.array_equal(subgrid.pixels, output_grid.pixels):
-                    print(f"[cutout] MATCH @ ({y}:{y+H_out}, {x}:{x+W_out})")
-
-                    crop_op = CropGrid(y, y + H_out, x, x + W_out)
-                    prog = GridProgram([crop_op])
-                    programs.append(prog)
-
-                    # Jeśli rozmiar jest inny — dodajemy resize
-                    if output_grid.shape() != (H_out, W_out):
-                        resize_op = ResizeGridTo(*output_grid.shape())
-                        prog = GridProgram([crop_op, resize_op])
+                    # Oblicz score na podstawie cech obiektów w wycięciu
+                    score = score_cutout_by_features((y, y + H_out, x, x + W_out), input_grid, output_grid)
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_cutout = (y, y + H_out, x, x + W_out)
+                        
+                        crop_op = CropGrid(y, y + H_out, x, x + W_out)
+                        prog = GridProgram([crop_op])
                         programs.append(prog)
+
+                        # Jeśli rozmiar jest inny — dodajemy resize
+                        if output_grid.shape() != (H_out, W_out):
+                            resize_op = ResizeGridTo(*output_grid.shape())
+                            prog = GridProgram([crop_op, resize_op])
+                            programs.append(prog)
 
     return programs
 
+def score_cutout_by_features(bbox: tuple, input_grid: Grid, output_grid: Grid) -> float:
+    """
+    Oblicza score wycięcia na podstawie cech obiektów w nim zawartych.
+    Wyższy score = lepsze dopasowanie do oczekiwanego wzorca.
+    """
+    y1, y2, x1, x2 = bbox
+    H_in, W_in = input_grid.shape()
+    
+    # Wyciągnij obiekty z wycięcia
+    cutout_grid = input_grid.crop(y1, y2, x1, x2)
+    cutout_objects = extract_all_object_views(cutout_grid)
+    
+    # Połącz wszystkie obiekty z różnych widoków
+    all_objects = []
+    for view_name, objects in cutout_objects.items():
+        all_objects.extend(objects)
+    
+    if not all_objects:
+        return 0.0
+    
+    scores = {}
+    
+    # 1. POŁOŻENIE - preferuj obiekty w skrajnych pozycjach
+    scores['position'] = score_position_features(bbox, H_in, W_in)
+    
+    # 2. ROZMIAR - preferuj obiekty o skrajnych rozmiarach
+    scores['size'] = score_size_features(all_objects)
+    
+    # 3. DZIURY - preferuj obiekty o skrajnej liczbie dziur
+    scores['holes'] = score_holes_features(all_objects)
+    
+    # 4. KOLOR - preferuj obiekty o skrajnych cechach kolorystycznych
+    scores['color'] = score_color_features(all_objects)
+    
+    # 5. IZOLACJA - preferuj obiekty oddalone od innych
+    scores['isolation'] = score_isolation_features(bbox, input_grid)
+    
+    # Suma wszystkich score'ów
+    total_score = sum(scores.values())
+    
+    return total_score
 
+def score_position_features(bbox: tuple, grid_h: int, grid_w: int) -> float:
+    """Score na podstawie położenia wycięcia w gridzie."""
+    y1, y2, x1, x2 = bbox
+    
+    # Normalizuj pozycje do [0,1]
+    center_y = (y1 + y2) / 2 / grid_h
+    center_x = (x1 + x2) / 2 / grid_w
+    
+    # Preferuj skrajne pozycje (blisko 0 lub 1)
+    score_y = max(center_y, 1 - center_y)  # Im dalej od środka, tym lepiej
+    score_x = max(center_x, 1 - center_x)
+    
+    # Dodatkowy bonus za pozycje w rogach
+    corner_bonus = 0.5 if (center_y > 0.8 or center_y < 0.2) and (center_x > 0.8 or center_x < 0.2) else 0
+    
+    return score_y + score_x + corner_bonus
+
+def score_size_features(objects: List[GridObject]) -> float:
+    """Score na podstawie rozmiaru obiektów."""
+    if not objects:
+        return 0.0
+    
+    areas = [obj.area() for obj in objects]
+    max_area = max(areas)
+    min_area = min(areas)
+    avg_area = sum(areas) / len(areas)
+    
+    # Preferuj obiekty o skrajnych rozmiarach
+    size_variance = max_area - min_area
+    size_score = size_variance / max(avg_area, 1)
+    
+    return size_score
+
+def score_holes_features(objects: List[GridObject]) -> float:
+    """Score na podstawie liczby dziur w obiektach."""
+    if not objects:
+        return 0.0
+    
+    holes_counts = [obj.features()['num_holes'] for obj in objects]
+    max_holes = max(holes_counts)
+    min_holes = min(holes_counts)
+    
+    # Preferuj obiekty o skrajnej liczbie dziur
+    holes_variance = max_holes - min_holes
+    holes_score = holes_variance / max(max_holes, 1)
+    
+    return holes_score
+
+def score_color_features(objects: List[GridObject]) -> float:
+    """Score na podstawie cech kolorystycznych obiektów."""
+    if not objects:
+        return 0.0
+    
+    color_scores = []
+    for obj in objects:
+        features = obj.features()
+        
+        # Preferuj obiekty o skrajnych cechach kolorystycznych
+        color_count = features['color_count']
+        is_uniform = features['is_uniform_color']
+        
+        # Bonus za jednolity kolor lub za dużą różnorodność
+        if is_uniform:
+            color_scores.append(1.0)  # Jednolity kolor
+        elif color_count > 3:
+            color_scores.append(0.8)  # Duża różnorodność
+        else:
+            color_scores.append(0.3)  # Średnia różnorodność
+    
+    return max(color_scores) if color_scores else 0.0
+
+def score_isolation_features(bbox: tuple, input_grid: Grid) -> float:
+    """Score na podstawie izolacji obiektów w wycięciu."""
+    y1, y2, x1, x2 = bbox
+    H_in, W_in = input_grid.shape()
+    
+    # Sprawdź czy wycięcie jest oddalone od krawędzi
+    margin_y = min(y1, H_in - y2) / H_in
+    margin_x = min(x1, W_in - x2) / W_in
+    
+    # Preferuj wycięcia blisko krawędzi (izolowane)
+    isolation_score = (1 - margin_y) + (1 - margin_x)
+    
+    return isolation_score
 
 def _mark_background(objs, bg_color, grid_h, grid_w):
     # Prosta reguła: jeśli obiekt ma tylko kolor tła i dotyka krawędzi → uznaj za tło
@@ -1467,6 +1596,91 @@ def debug_task(task_id, dataset_path="./", verbose=False):
         else:
             print(f"Output nie może być wycięciem z input (za duży)")
 
+    # Dodatkowe debugowanie dla zadania 73ccf9c2
+    if task_id == "73ccf9c2" and verbose:
+        print("\n🔍 SZCZEGÓŁOWA ANALIZA ZADANIA 73ccf9c2")
+        print("=" * 50)
+        
+        print(f"Input shape: {input_grid.shape()}")
+        print(f"Output shape: {output_grid.shape()}")
+        print(f"Input grid:\n{input_grid.pixels}")
+        print(f"Output grid:\n{output_grid.pixels}")
+        
+        # Analiza obiektów w input
+        input_views = extract_all_object_views(input_grid)
+        print(f"\n📊 OBIEKTY W INPUT:")
+        for view_name, objects in input_views.items():
+            print(f"\n{view_name}:")
+            for i, obj in enumerate(objects):
+                features = obj.features()
+                print(f"  Obiekt {i+1}: bbox={obj.bbox}, area={features['area']}, "
+                      f"num_holes={features['num_holes']}, main_color={features['main_color']}, "
+                      f"shape_type={features['shape_type']}, touches_border={features['touches_border']}")
+        
+        # Analiza obiektów w output
+        output_views = extract_all_object_views(output_grid)
+        print(f"\n📊 OBIEKTY W OUTPUT:")
+        for view_name, objects in output_views.items():
+            print(f"\n{view_name}:")
+            for i, obj in enumerate(objects):
+                features = obj.features()
+                print(f"  Obiekt {i+1}: bbox={obj.bbox}, area={features['area']}, "
+                      f"num_holes={features['num_holes']}, main_color={features['main_color']}, "
+                      f"shape_type={features['shape_type']}, touches_border={features['touches_border']}")
+        
+        # Sprawdź czy output jest wycięciem z input
+        print(f"\n🔍 SPRAWDZENIE CUT-OUT:")
+        ih, iw = input_grid.shape()
+        oh, ow = output_grid.shape()
+        
+        if ih >= oh and iw >= ow:
+            print(f"Output może być wycięciem z input")
+            best_cutout = None
+            best_score = -1
+            
+            for y in range(ih - oh + 1):
+                for x in range(iw - ow + 1):
+                    subgrid = input_grid.crop(y, y + oh, x, x + ow)
+                    if np.array_equal(subgrid.pixels, output_grid.pixels):
+                        print(f"✅ ZNALEZIONO DOKŁADNE CUT-OUT: ({y}:{y+oh}, {x}:{x+ow})")
+                        
+                        # Oblicz score dla tego cut-out
+                        score = score_cutout_by_features((y, y + oh, x, x + ow), input_grid, output_grid)
+                        print(f"Score dla tego cut-out: {score}")
+                        
+                        if score > best_score:
+                            best_score = score
+                            best_cutout = (y, y + oh, x, x + ow)
+                        
+                        return True, f"cut-out at ({y}:{y+oh}, {x}:{x+ow}) with score {score}"
+                    else:
+                        # Pokaż różnice dla bliskich dopasowań
+                        diff = np.sum(subgrid.pixels != output_grid.pixels)
+                        if diff <= 10:  # Pokaż bliskie dopasowania
+                            print(f"  Blisko: diff={diff} @ ({y}:{y+oh}, {x}:{x+ow})")
+                            print(f"    Subgrid:\n{subgrid.pixels}")
+                            print(f"    Expected:\n{output_grid.pixels}")
+        else:
+            print(f"Output nie może być wycięciem z input (za duży)")
+        
+        # Sprawdź cut-out detection heurystykę
+        print(f"\n🔍 SPRAWDZENIE HEURYSTYKI CUT-OUT:")
+        cutout_task = {"train": [{"input": input_grid.pixels.tolist(), "output": output_grid.pixels.tolist()}]}
+        cutout_programs = detect_cut_out_candidate(cutout_task)
+        print(f"Znalezione programy cut-out: {len(cutout_programs)}")
+        for i, program in enumerate(cutout_programs):
+            print(f"  Program {i+1}: {program}")
+            try:
+                result = program.apply(input_grid)
+                if result is not None:
+                    is_match = np.array_equal(result.pixels, output_grid.pixels)
+                    print(f"    Wynik: {'✅ PASUJE' if is_match else '❌ NIE PASUJE'}")
+                    if not is_match:
+                        print(f"    Otrzymany:\n{result.pixels}")
+                        print(f"    Oczekiwany:\n{output_grid.pixels}")
+            except Exception as e:
+                print(f"    Błąd wykonania: {e}")
+
     candidates = generate_candidate_programs(input_grid, output_grid, verbose=verbose)
     for program, explanation in candidates:
         try:
@@ -1486,8 +1700,8 @@ def debug_many_tasks(task_ids, dataset_path="./"):
     for task_id in task_ids:
         print(f"===== {task_id} =====")
         try:
-            # Debugowanie tylko dla zadania 358ba94e
-            verbose_debug = (task_id == "358ba94e")
+            # Debugowanie dla zadań 358ba94e i 73ccf9c2
+            verbose_debug = (task_id == "358ba94e" or task_id == "73ccf9c2")
             ok, why = debug_task(task_id, dataset_path, verbose=verbose_debug)
             if ok:
                 print(f"✅ {task_id} passed via {why}")
@@ -1524,21 +1738,20 @@ def get_all_task_ids_from_json(dataset_path="./"):
 
 if __name__ == "__main__":
     # # debug_task("0692e18c", dataset_path="dane/", verbose=True)
-    # TASK_IDS = get_all_task_ids_from_json("dane/")
-    # debug_many_tasks(TASK_IDS, dataset_path="dane/")
-    # TEST_TASK_IDS = ["358ba94e"]
-    TEST_TASK_IDS = [
-        "00576224", "007bbfb7", "0692e18c", "0c786b71", "15696249",
-        "27f8ce4f", "3af2c5a8", "3c9b0459", "46442a0e", "48131b3c",
-        "48f8583b", "4c4377d9", "4e7e0eb9", "59341089", "5b6cbef5",
-        "6150a2bd", "62c24649", "67a3c6ac", "67e8384a", "68b16354",
-        "6d0aefbc", "6fa7a44f", "74dd1130", "7953d61e", "7fe24cdd",
-        "833dafe3", "8be77c9e", "8d5021e8", "8e2edd66", "90347967",
-        "9dfd6313", "a416b8f3", "a59b95c0", "ad7e01d0", "bc4146bd",
-        "c3e719e8", "c48954c1", "c9e6f938", "ccd554ac", "cce03e0d",
-        "cf5fd0ad", "ed36ccf7", "ed98d772",
-        "358ba94e"
-    ]
+    TASK_IDS = get_all_task_ids_from_json("dane/")
+    debug_many_tasks(TASK_IDS, dataset_path="dane/")
+    # TEST_TASK_IDS = [
+    #     "00576224", "007bbfb7", "0692e18c", "0c786b71", "15696249",
+    #     "27f8ce4f", "3af2c5a8", "3c9b0459", "46442a0e", "48131b3c",
+    #     "48f8583b", "4c4377d9", "4e7e0eb9", "59341089", "5b6cbef5",
+    #     "6150a2bd", "62c24649", "67a3c6ac", "67e8384a", "68b16354",
+    #     "6d0aefbc", "6fa7a44f", "74dd1130", "7953d61e", "7fe24cdd",
+    #     "833dafe3", "8be77c9e", "8d5021e8", "8e2edd66", "90347967",
+    #     "9dfd6313", "a416b8f3", "a59b95c0", "ad7e01d0", "bc4146bd",
+    #     "c3e719e8", "c48954c1", "c9e6f938", "ccd554ac", "cce03e0d",
+    #     "cf5fd0ad", "ed36ccf7", "ed98d772",
+    #     "358ba94e", "73ccf9c2"
+    # ]
 
-    debug_many_tasks(TEST_TASK_IDS, dataset_path="dane/")
+    # debug_many_tasks(TEST_TASK_IDS, dataset_path="dane/")
 
