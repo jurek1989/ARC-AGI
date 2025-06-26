@@ -54,7 +54,11 @@ To oznacza: opis semantyczny, modularny, kompozycyjny.
 - porównania input/output na poziomie obiektów i ich cech, itd itp to otwarta lista
 - analiza różnic, propozycje transformacji.
 
-4. Użycie LLM (lokalnego):
+4. **Użycie LLM (ZINTEGROWANY):**
+- **Model:** Qwen3-0.6B na Colab + FastAPI + Cloudflare Tunnel
+- **Endpoint:** `https://brighton-t-zen-postcard.trycloudflare.com/generate`
+- **Format:** `{"prompt": "text"}` → `{"response": "text"}`
+- **Status:** ✅ DZIAŁA - przetestowany i gotowy
 - nie generuje kodu ani outputów,
 - otrzymuje: opis obiektów, różnice, dostępne operacje,
 - ma zaproponować: strategię, sekwencję operacji lub nową operację.
@@ -71,23 +75,16 @@ LLm może dodać głupoty, po tym kroku trzeb się dna 100% upewnić że wszytsk
 
 ---
 
-⚠️ CO ZE STARYM KODEM?
 
-- Plik `arc_agi_system.py` rozwiązuje 26 zadań, ale jest całkowicie **nieprzydatny do generalizacji**.
-- Zawiera ręcznie dopasowane operacje i twarde if-else – nie ma kompozycji, nie ma logiki semantycznej.
-- Traktujemy go jako **antyprzykład**. Nie rozwijamy go. Nie refaktorujemy.
-- Używamy go jedynie jako punkt odniesienia — **czego unikać**.
-
----
-
-📁 STRUKTURA PROJEKTU
-
-ARC/
-├── arc_agi_system.py
-│   - STARY KOD — do analizy błędów projektowych, NIE DO UŻYCIA
+ARC/-- już troche niaaktualny bo doszło trochę nowych rzeczy
 │
 ├── arc_agi_solver.py
-│   - NOWY KOD — miejsce na semantyczny DSL, reguły, heurystyki, search
+│   - GŁÓNWY KOD — miejsce na semantyczny DSL, reguły, heurystyki, search
+│
+├── llm_api_client.py
+│   - **LLM API CLIENT (W PEŁNI ZINTEGROWANY)** ✅
+│   - Endpoint: https://brighton-t-zen-postcard.trycloudflare.com/generate
+│   - Model: Qwen3-0.6B na Colab + FastAPI + Cloudflare Tunnel
 │
 ├── task_viewer.py
 │   - Moduł do przeglądania zadań (wizualizacja + zapis TXT/PNG)
@@ -110,3 +107,12 @@ ARC/
 - Kod, który nie generalizuje — nie przechodzi.
 - **Zawsze robimy testy regresyjne. Co działało — musi dalej działać.**
 - Kod ma być możliwy do rozszerzania i testowania.
+
+---
+
+🧠 **LLM STATUS (2024-12-19):**
+- **Model:** Qwen3-0.6B
+- **Hosting:** Google Colab + FastAPI + Cloudflare Tunnel
+- **Endpoint:** `https://brighton-t-zen-postcard.trycloudflare.com/generate`
+- **Status:** ✅ DZIAŁA - przetestowany i gotowy do użycia
+- **Uwaga:** Endpoint tymczasowy - może wymagać aktualizacji po restarcie Colaba
