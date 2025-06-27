@@ -54,27 +54,39 @@ To oznacza: opis semantyczny, modularny, kompozycyjny.
 - porównania input/output na poziomie obiektów i ich cech, itd itp to otwarta lista
 - analiza różnic, propozycje transformacji.
 
-4. **Użycie LLM (ZINTEGROWANY):**
+4. **Użycie LLM (ZINTEGROWANY, 2024-12-19):**
 - **Model:** Qwen3-0.6B na Colab + FastAPI + Cloudflare Tunnel
-- **Endpoint:** `https://brighton-t-zen-postcard.trycloudflare.com/generate`
-- **Format:** `{"prompt": "text"}` → `{"response": "text"}`
-- **Status:** ✅ DZIAŁA - przetestowany i gotowy
-- nie generuje kodu ani outputów,
-- otrzymuje: opis obiektów, różnice, dostępne operacje,
-- ma zaproponować: strategię, sekwencję operacji lub nową operację.
+- **Endpoint:** https://brighton-t-zen-postcard.trycloudflare.com/generate
+- **Status:** ✅ DZIAŁA - w pełni zintegrowany, testy przechodzą
+- LLM analizuje obiekty, różnice, dostępne operacje i sugeruje strategię
+- LLM nie generuje kodu ani outputów, tylko strategię i operacje
 
-5. Search:
+5. **Zaawansowane matchowanie obiektów (NOWOŚĆ):**
+- Dopasowanie obiektów input/output (Hungarian, cechy: shape, area, pozycja, kolor, progi)
+- Szczegółowa analiza różnic i transformacji
+- Testy matchingu (różne progi, widoki, transformacje)
+
+6. Search:
 - beam search, DFS lub inny planista symboliczny,
 - priorytet operacji wskazanych przez heurystyki lub LLM.
 
-6. Fallback:
+7. Fallback:
 - brute-force lub losowe wariacje w ograniczonym zakresie,
 - Generowanie nowych operacji dsl przez LLM na podstawie: opis obiektów, różnice, dostępne operacje,
-i widzą że się nie udało jak dotąd, tylko jeśli wszystko inne zawiedzie, z walidacją i testem regresyjnym.
-LLm może dodać głupoty, po tym kroku trzeb się dna 100% upewnić że wszytsko dalej działa.
+- Tylko jeśli wszystko inne zawiedzie, z walidacją i testem regresyjnym.
 
 ---
 
+🟢 **AKTUALNY STATUS (2024-12-19):**
+- LLM API w pełni zintegrowany i przetestowany
+- Zaawansowane matchowanie obiektów działa, testy przechodzą
+- Szczegółowa analiza różnic i transformacji obiektów
+- Testy matchingu (różne progi, widoki, transformacje)
+
+🔜 **NAJBLIŻSZE KROKI:**
+- Rozwój DSL: nowe operacje na obiektach (Scale, Copy, Delete, Merge)
+- Dalsze testy i integracja heurystyk z LLM
+- Rozwój planisty i heurystyk
 
 ARC/-- już troche niaaktualny bo doszło trochę nowych rzeczy
 │

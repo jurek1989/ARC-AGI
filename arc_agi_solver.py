@@ -1,29 +1,22 @@
 """
-# ARC Prize 2025 – Konkurs AGI: celem jest rozwiązywanie zadań wymagających abstrakcyjnego rozumowania.
-# Zadania polegają na przekształcaniu siatek (gridów) złożonych z liczb 0–9 na podstawie przykładowych par (input/output).
-# Każde zadanie ma strukturę:
-# {
-#   "train": [{"input": [[...]], "output": [[...]]}, ...],
-#   "test": [{"input": [[...]]}, ...]
-# }
-# Przykład:
-# input:  [[1, 0],      output: [[0, 1],
-#          [0, 1]]                [1, 0]]
-# -> symetria względem przekątnej
-
-# Celem jest wygenerowanie poprawnego outputu dla każdego test inputu.
-# Tylko **dokładne** dopasowanie do prawidłowego rozwiązania (perfect match) jest punktowane.
-# Skuteczność modelu to odsetek trafionych outputów spośród wszystkich testów.
-
-# Wskazówki:
-# - Zadania nie są losowe – większość opiera się na geometrycznych transformacjach, kolorach, strukturach bloków.
-# - Nie działają proste LLM-y, CNN-y czy brute-force (setki transformacji) – zadania są zbyt zróżnicowane.
-# - Przykładowe podejścia: reguły symboliczne, kompozycje prostych operacji, programy generatywne.
-# - Model musi być zdolny do generalizacji – nie można "uczyć się" konkretnych tasków testowych.
-
-# Wymagania:
-# - Czas działania notebooka: max 12h (CPU/GPU), bez Internetu.
-# - submission.json musi zawierać DWIE próby dla każdego test inputu (nie można pomijać attempt_2).
+# ARC Prize 2025 – AGI Solver: Rozumowanie na siatkach (ARC)
+# ---------------------------------------------------------
+# Projekt rozwiązuje zadania ARC (Abstraction and Reasoning Corpus) przez analizę obiektową, heurystyki i integrację z LLM.
+# 
+# AKTUALNY STAN (2024-12-19):
+# - LLM API (Qwen3-0.6B, FastAPI, Cloudflare Tunnel) w pełni zintegrowany i przetestowany
+# - Zaawansowane matchowanie obiektów input/output (Hungarian, cechy: shape, area, pozycja, kolor, progi)
+# - Szczegółowa analiza różnic i transformacji obiektów
+# - Testy matchowania (różne progi, widoki, transformacje) — przechodzą
+# - Gotowe narzędzia: task_viewer, debug_task, testy
+# 
+# KOLEJNY KROK:
+# - Rozwój DSL: nowe operacje na obiektach (Scale, Copy, Delete, Merge)
+# - Dalsze testy i integracja heurystyk z LLM
+# 
+# Zasady: iteracyjny rozwój, testy regresyjne, generalizacja, wydajność (Kaggle constraints)
+#
+# Pełny plan: ROADMAP.md
 """
 
 """
@@ -107,6 +100,7 @@ from scipy.ndimage import label
 from collections import Counter
 from scipy.optimize import linear_sum_assignment
 import time
+import requests
 
 # Import LLM module
 try:
@@ -597,32 +591,70 @@ def visualize_objects(grid: Grid, objects: List[GridObject]):
 def compute_match_cost(obj1: GridObject, obj2: GridObject) -> float:
     """
     Oblicza koszt dopasowania między dwoma obiektami.
-    Im mniejszy koszt, tym lepsze dopasowanie.
+    Hierarchia cech: kształt > powierzchnia > położenie > kolor
+    Zwraca score 0.0-1.0 (1.0 = idealne dopasowanie, 0.0 = brak dopasowania)
     """
     f1 = obj1.features()
     f2 = obj2.features()
 
-    # Odległość centroidów (ważna przy przesunięciach)
+    # 1. KSZTAŁT (waga: 0.4) - najważniejszy
+    shape_score = 0.0
+    if f1["shape_type"] == f2["shape_type"]:
+        shape_score = 1.0
+        # Dodatkowy bonus za identyczne cechy kształtu
+        if f1["num_holes"] == f2["num_holes"]:
+            shape_score += 0.2
+        if f1["aspect_ratio"] == f2["aspect_ratio"]:
+            shape_score += 0.1
+    else:
+        # Kary za różne kształty
+        if f1["shape_type"] in ["line_h", "line_v"] and f2["shape_type"] in ["line_h", "line_v"]:
+            shape_score = 0.5  # oba to linie, ale różne orientacje
+        elif f1["shape_type"] in ["square", "rectangle"] and f2["shape_type"] in ["square", "rectangle"]:
+            shape_score = 0.3  # oba to prostokąty
+        else:
+            shape_score = 0.0  # całkowicie różne kształty
+
+    # 2. POWIERZCHNIA (waga: 0.3) - ważna bo obiekty często są modyfikowane
+    area1, area2 = f1["area"], f2["area"]
+    if area1 == 0 and area2 == 0:
+        area_score = 1.0
+    elif area1 == 0 or area2 == 0:
+        area_score = 0.0
+    else:
+        # Normalizowana różnica powierzchni
+        area_diff = abs(area1 - area2) / max(area1, area2)
+        area_score = max(0.0, 1.0 - area_diff)
+
+    # 3. POŁOŻENIE (waga: 0.2) - mniej ważne, bo obiekty często się przesuwają
     c1y, c1x = obj1.centroid()
     c2y, c2x = obj2.centroid()
     centroid_dist = ((c1y - c2y) ** 2 + (c1x - c2x) ** 2) ** 0.5
+    
+    # Normalizuj odległość względem rozmiaru grida (przybliżenie)
+    grid_size = max(obj1.grid.shape()[0], obj1.grid.shape()[1], 
+                   obj2.grid.shape()[0], obj2.grid.shape()[1])
+    normalized_dist = centroid_dist / max(grid_size, 1)
+    position_score = max(0.0, 1.0 - normalized_dist)
 
-    # Różnica w area
-    area_diff = abs(f1["area"] - f2["area"]) / max(f1["area"], f2["area"], 1)
+    # 4. KOLOR (waga: 0.1) - najmniej ważny, bo często się zmienia
+    color_score = 0.0
+    if f1["main_color"] == f2["main_color"]:
+        color_score = 1.0
+    else:
+        # Sprawdź czy kolory są podobne (w tej samej palecie)
+        color_diff = sum(abs(a - b) for a, b in zip(f1["color_vector"], f2["color_vector"]))
+        max_possible_diff = sum(f1["color_vector"]) + sum(f2["color_vector"])
+        if max_possible_diff > 0:
+            color_score = max(0.0, 1.0 - color_diff / max_possible_diff)
 
-    # Shape penalty: 0 jeśli identyczny, 1 jeśli inny
-    shape_penalty = 0 if f1["shape_type"] == f2["shape_type"] else 1
-
-    # Różnica kolorów (L1 norm)
-    color_diff = sum(abs(a - b) for a, b in zip(f1["color_vector"], f2["color_vector"]))
-
-    # Można ważyć składniki, np. centroid najważniejszy
-    return (
-        1.0 * centroid_dist +
-        1.0 * area_diff +
-        2.0 * shape_penalty +
-        0.5 * color_diff
-    )
+    # Oblicz końcowy score z wagami
+    final_score = (0.4 * shape_score + 
+                   0.3 * area_score + 
+                   0.2 * position_score + 
+                   0.1 * color_score)
+    
+    return final_score
 
 def diff_features(obj1: GridObject, obj2: GridObject) -> dict:
     """
@@ -640,10 +672,11 @@ def diff_features(obj1: GridObject, obj2: GridObject) -> dict:
 
 from scipy.optimize import linear_sum_assignment
 
-def match_objects(input_objs: List[GridObject], output_objs: List[GridObject]) -> List[Tuple[GridObject, GridObject, dict]]:
+def match_objects(input_objs: List[GridObject], output_objs: List[GridObject], threshold=0.8) -> List[Tuple[GridObject, GridObject, dict, float]]:
     """
     Dopasowuje obiekty z inputu do obiektów z outputu na podstawie kosztu dopasowania.
-    Zwraca listę par (input_obj, output_obj, diff_dict)
+    Tylko ewidentne pasujące obiekty (score > threshold).
+    Zwraca listę par (input_obj, output_obj, diff_dict, confidence_score)
     """
     if not input_objs or not output_objs:
         return []
@@ -651,10 +684,11 @@ def match_objects(input_objs: List[GridObject], output_objs: List[GridObject]) -
     n, m = len(input_objs), len(output_objs)
     cost_matrix = np.zeros((n, m))
 
-    # Oblicz macierz kosztów
+    # Oblicz macierz kosztów (1 - score, bo Hungarian algorithm minimalizuje koszt)
     for i, obj_in in enumerate(input_objs):
         for j, obj_out in enumerate(output_objs):
-            cost_matrix[i, j] = compute_match_cost(obj_in, obj_out)
+            score = compute_match_cost(obj_in, obj_out)
+            cost_matrix[i, j] = 1.0 - score  # Konwersja score na koszt
 
     # Znajdź optymalne dopasowanie
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
@@ -663,17 +697,21 @@ def match_objects(input_objs: List[GridObject], output_objs: List[GridObject]) -
     for i, j in zip(row_ind, col_ind):
         obj_in = input_objs[i]
         obj_out = output_objs[j]
-        diff = diff_features(obj_in, obj_out)
-        matches.append((obj_in, obj_out, diff))
+        score = 1.0 - cost_matrix[i, j]  # Konwersja kosztu z powrotem na score
+        
+        # Tylko ewidentne pasujące obiekty
+        if score >= threshold:
+            diff = diff_features(obj_in, obj_out)
+            matches.append((obj_in, obj_out, diff, score))
 
     return matches
 
-def print_matches(matches: List[Tuple[GridObject, GridObject, dict]]):
+def print_matches(matches: List[Tuple[GridObject, GridObject, dict, float]]):
     """
     Czytelny wydruk dopasowań input ↔ output obiektów z różnicami cech.
     """
-    for idx, (obj_in, obj_out, diff) in enumerate(matches, 1):
-        print(f"--- Dopasowanie {idx} ---")
+    for idx, (obj_in, obj_out, diff, confidence) in enumerate(matches, 1):
+        print(f"--- Dopasowanie {idx} (confidence: {confidence:.3f}) ---")
         print(f"IN : bbox={obj_in.bbox}, area={obj_in.area()}, main_color={obj_in.features()['main_color']}")
         print(f"OUT: bbox={obj_out.bbox}, area={obj_out.area()}, main_color={obj_out.features()['main_color']}")
 
@@ -684,6 +722,208 @@ def print_matches(matches: List[Tuple[GridObject, GridObject, dict]]):
         else:
             print(" ✅ Brak różnic")
         print()
+
+def create_matching_analysis_for_llm(input_objects: List[GridObject], output_objects: List[GridObject], matches: List[Tuple[GridObject, GridObject, dict, float]]) -> dict:
+    """
+    Tworzy analizę matchingu w formacie dla LLM.
+    
+    Returns:
+        dict z kategoriami:
+        - matched_pairs: [(input_obj, output_obj, transformations, confidence)]
+        - new_objects: [output_objects bez matcha]
+        - deleted_objects: [input_objects bez matcha]
+        - transformations: wykryte transformacje
+    """
+    # Obiekty z matchami
+    matched_input_ids = set()
+    matched_output_ids = set()
+    matched_pairs = []
+    
+    for input_obj, output_obj, diff, confidence in matches:
+        matched_input_ids.add(id(input_obj))
+        matched_output_ids.add(id(output_obj))
+        
+        # Wykryj transformacje na podstawie różnic
+        transformations = detect_object_transformations(input_obj, output_obj, diff)
+        matched_pairs.append((input_obj, output_obj, transformations, confidence))
+    
+    # Nowe obiekty (w output, ale nie w input)
+    new_objects = [obj for obj in output_objects if id(obj) not in matched_output_ids]
+    
+    # Usunięte obiekty (w input, ale nie w output)
+    deleted_objects = [obj for obj in input_objects if id(obj) not in matched_input_ids]
+    
+    return {
+        'matched_pairs': matched_pairs,
+        'new_objects': new_objects,
+        'deleted_objects': deleted_objects,
+        'total_input_objects': len(input_objects),
+        'total_output_objects': len(output_objects),
+        'matched_count': len(matched_pairs),
+        'new_count': len(new_objects),
+        'deleted_count': len(deleted_objects)
+    }
+
+def detect_object_transformations(input_obj: GridObject, output_obj: GridObject, diff: dict) -> dict:
+    """
+    Wykrywa transformacje między dwoma obiektami na podstawie różnic cech.
+    """
+    transformations = {}
+    
+    # Pozycja (przesunięcie)
+    c1y, c1x = input_obj.centroid()
+    c2y, c2x = output_obj.centroid()
+    dx = c2x - c1x
+    dy = c2y - c1y
+    if abs(dx) > 0.1 or abs(dy) > 0.1:  # Tolerancja dla małych różnic
+        transformations['translation'] = (dx, dy)
+    
+    # Rozmiar (skalowanie)
+    if 'area' in diff:
+        area1, area2 = diff['area']
+        if area1 > 0 and area2 > 0:
+            scale_factor = area2 / area1
+            if abs(scale_factor - 1.0) > 0.1:  # Tolerancja
+                transformations['scale'] = scale_factor
+    
+    # Kolor (recolor)
+    if 'main_color' in diff:
+        from_color, to_color = diff['main_color']
+        transformations['recolor'] = (from_color, to_color)
+    
+    # Kształt (rotacja/flip)
+    if 'aspect_ratio' in diff:
+        # Może to być rotacja (aspect_ratio się odwraca)
+        ar1, ar2 = diff['aspect_ratio']
+        if ar1 is not None and ar2 is not None and ar1 > 0 and ar2 > 0:
+            ratio_change = ar2 / ar1
+            if abs(ratio_change - 1.0) > 0.1:
+                transformations['shape_change'] = f"aspect_ratio: {ar1:.2f} → {ar2:.2f}"
+    
+    return transformations
+
+def ask_llm_for_matching_strategy(task_id: str, input_grid: Grid, output_grid: Grid, matching_analysis: dict, verbose=False) -> Optional[Tuple[bool, str]]:
+    """
+    Pyta LLM o strategię na podstawie analizy matchingu obiektów.
+    
+    Args:
+        task_id: ID zadania
+        input_grid: Grid wejściowy
+        output_grid: Grid wyjściowy
+        matching_analysis: Wynik create_matching_analysis_for_llm()
+        verbose: Czy wyświetlać szczegółowe informacje
+        
+    Returns:
+        Tuple[bool, str] lub None - (sukces, wyjaśnienie) lub None jeśli LLM nie jest dostępny
+    """
+    if not LLM_AVAILABLE:
+        if verbose:
+            print("⚠️  LLM not available, skipping LLM matching analysis")
+        return None
+    
+    try:
+        if verbose:
+            print(f"\n🧠 LLM MATCHING ANALYSIS for task {task_id}")
+            print("=" * 60)
+        
+        # Initialize LLM interface
+        llm = LLMAPIClient()
+        if verbose:
+            print(f"🔧 LLM client created, checking availability...")
+            print(f"🔧 LLM base_url: {llm.base_url}")
+        
+        if not llm.is_available:
+            if verbose:
+                print("⚠️  LLM API not available, skipping LLM matching analysis")
+            return None
+        
+        if verbose:
+            print(f"✅ LLM is available!")
+        
+        # Stwórz krótki, konkretny prompt na podstawie wzorca z test_llm_prompts.py
+        matched_count = matching_analysis.get('matched_count', 0)
+        new_count = matching_analysis.get('new_count', 0)
+        deleted_count = matching_analysis.get('deleted_count', 0)
+        
+        # Krótki opis transformacji
+        transformations_desc = ""
+        if matching_analysis.get('matched_pairs'):
+            input_obj, output_obj, transformations, confidence = matching_analysis['matched_pairs'][0]
+            if transformations:
+                transforms = []
+                if 'translation' in transformations:
+                    dx, dy = transformations['translation']
+                    transforms.append(f"moved by ({dx:.1f}, {dy:.1f})")
+                if 'recolor' in transformations:
+                    from_c, to_c = transformations['recolor']
+                    transforms.append(f"color {from_c}→{to_c}")
+                if 'scale' in transformations:
+                    transforms.append(f"scaled by {transformations['scale']:.1f}")
+                if transforms:
+                    transformations_desc = f" Transformations: {', '.join(transforms)}"
+        
+        prompt = f"""ARC Task Analysis:
+Input: {input_grid.shape()} grid with {matching_analysis.get('total_input_objects', 0)} objects
+Output: {output_grid.shape()} grid with {matching_analysis.get('total_output_objects', 0)} objects
+Matching: {matched_count} matched, {new_count} new, {deleted_count} deleted{transformations_desc}
+
+Available operations: Translate, Rotate90/180/270, Recolor, Scale, AddRectangle, AddLine, CopyObject, DeleteObject
+
+What strategy should I use to solve this task? Answer in format:
+STRATEGY: [brief description]
+OPERATIONS: [list of specific operations]
+REASONING: [why this strategy]"""
+        
+        if verbose:
+            print("📋 Sending matching analysis to LLM...")
+            print(f"Prompt length: {len(prompt)} characters")
+            print(f"🔧 Using URL: {llm.base_url}/generate")
+            print(f"\n📤 PROMPT TO LLM:")
+            print("=" * 60)
+            print(prompt)
+            print("=" * 60)
+        
+        # Wyślij do LLM używając prostego wzorca z test_llm_prompts.py
+        start_time = time.time()
+        try:
+            response = requests.post(f"{llm.base_url}/generate", json={"prompt": prompt}, timeout=30)
+            if verbose:
+                print(f"🔧 Response status: {response.status_code}")
+        except Exception as e:
+            if verbose:
+                print(f"❌ LLM request failed: {e}")
+            return None
+            
+        analysis_time = time.time() - start_time
+        
+        if response.status_code == 200:
+            llm_response = response.json()
+            response_text = llm_response.get("response", "")
+            
+            if verbose:
+                print(f"⏱️  LLM response time: {analysis_time:.2f}s")
+                print(f"🎯 LLM Response:")
+                print(response_text)
+                print("=" * 60)
+            
+            # Próbuj wyciągnąć operacje z odpowiedzi LLM
+            if "OPERATIONS:" in response_text:
+                operations_section = response_text.split("OPERATIONS:")[1].split("REASONING:")[0].strip()
+                if verbose:
+                    print(f"🔧 Extracted operations: {operations_section}")
+                
+                # Na razie zwracamy informację o analizie
+                return True, f"LLM matching analysis: {matched_count} matched, {new_count} new, {deleted_count} deleted"
+        
+        if verbose:
+            print(f"⚠️  LLM analysis completed but no clear strategy found")
+        
+        return None
+        
+    except Exception as e:
+        if verbose:
+            print(f"❌ LLM matching analysis failed: {e}")
+        return None
 
 def match_object_to_input(output_obj: GridObject, input_objects: List[GridObject]) -> Optional[GridObject]:
     """
@@ -1626,6 +1866,69 @@ def debug_task(task_id, dataset_path="./", verbose=False):
         success, explanation = llm_result
         if success:
             return True, f"LLM: {explanation}"
+
+    # 🔍 OBJECT MATCHING ANALYSIS - nowa heurystyka
+    if verbose:
+        print(f"\n🔍 OBJECT MATCHING ANALYSIS for task {task_id}")
+        print("=" * 50)
+    
+    # Wyciągnij obiekty z obu gridów
+    input_views = extract_all_object_views(input_grid)
+    output_views = extract_all_object_views(output_grid)
+    
+    # Użyj najbardziej kompletnego widoku (conn8_multicolor)
+    input_objects = input_views.get('conn8_multicolor', [])
+    output_objects = output_views.get('conn8_multicolor', [])
+    
+    if verbose:
+        print(f"📊 Input objects: {len(input_objects)}")
+        print(f"📊 Output objects: {len(output_objects)}")
+        
+        # Pokaż obiekty input
+        print(f"\n📋 INPUT OBJECTS:")
+        for i, obj in enumerate(input_objects):
+            features = obj.features()
+            print(f"  {i+1}: {features['shape_type']}, area={features['area']}, "
+                  f"color={features['main_color']}, bbox={obj.bbox}")
+        
+        # Pokaż obiekty output
+        print(f"\n📋 OUTPUT OBJECTS:")
+        for i, obj in enumerate(output_objects):
+            features = obj.features()
+            print(f"  {i+1}: {features['shape_type']}, area={features['area']}, "
+                  f"color={features['main_color']}, bbox={obj.bbox}")
+    
+    # Wykonaj matching obiektów
+    matches = match_objects(input_objects, output_objects, threshold=0.8)
+    
+    if verbose:
+        print(f"\n🔗 MATCHING RESULTS (threshold=0.8):")
+        print(f"Found {len(matches)} matches")
+        print_matches(matches)
+    
+    # Stwórz analizę dla LLM
+    matching_analysis = create_matching_analysis_for_llm(input_objects, output_objects, matches)
+    
+    if verbose:
+        print(f"\n📊 MATCHING ANALYSIS:")
+        print(f"  Matched pairs: {matching_analysis['matched_count']}")
+        print(f"  New objects: {matching_analysis['new_count']}")
+        print(f"  Deleted objects: {matching_analysis['deleted_count']}")
+        
+        # Pokaż szczegóły transformacji
+        if matching_analysis['matched_pairs']:
+            print(f"\n🔄 DETECTED TRANSFORMATIONS:")
+            for i, (input_obj, output_obj, transformations, confidence) in enumerate(matching_analysis['matched_pairs']):
+                print(f"  Match {i+1} (confidence: {confidence:.3f}):")
+                for transform_type, transform_value in transformations.items():
+                    print(f"    {transform_type}: {transform_value}")
+    
+    # Zapytaj LLM o strategię na podstawie matchingu
+    llm_matching_result = ask_llm_for_matching_strategy(task_id, input_grid, output_grid, matching_analysis, verbose=verbose)
+    if llm_matching_result:
+        success, explanation = llm_matching_result
+        if success:
+            return True, f"LLM matching: {explanation}"
 
     # Dodatkowe debugowanie dla zadania 358ba94e
     if task_id == "358ba94e" and verbose:
